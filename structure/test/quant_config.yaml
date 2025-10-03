@@ -1,0 +1,101 @@
+# Model Configuration File for Quantization integration
+model:
+  name: "facebook/opt-350m"  # facebook/opt-350m, meta-llama/Llama-3.2-1B-Instruct
+  
+  # Model loading parameters
+  torch_dtype: "float16"
+  device_map: "auto"
+  trust_remote_code: true
+  low_cpu_mem_usage: true
+
+quantization:
+  enabled: true
+  framework: "gptq"   # 可選: gptq, awq, bnb
+
+  gptq:
+    bits: 4
+    group_size: -1          # -1 表示不分組
+    damp_percent: 0.01
+    desc_act: true
+    sym: true
+    true_sequential: true
+    calib_num: 32
+    output_dir: "quantized/gptq"
+
+  awq:
+    zero_point: true
+    q_group_size: 128
+    w_bit: 4
+    version: "gemm"         # 選項: gemm, gemv, marlin, gemv_fast
+    modules_to_not_convert: []
+    output_dir: "quantized/awq"
+
+  bnb:
+    bits: 4
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_use_double_quant: true
+    bnb_4bit_compute_dtype: "bfloat16"
+    llm_int8_threshold: 6.0
+    llm_int8_skip_modules: []
+    llm_int8_has_fp16_weight: false
+    llm_int8_enable_fp32_cpu_offload: false
+    output_dir: "quantized/bnb"
+
+generation:
+  max_new_tokens: 512
+  temperature: 0.7
+  do_sample: true
+  top_p: 0.9
+  top_k: 50
+  repetition_penalty: 1.1
+  
+  math:
+    temperature: 0.1
+    max_new_tokens: 1024
+    do_sample: false
+    
+dataset:
+  name: "gsm8k"
+  config: "main"
+  split: "test"
+  num_samples: 50
+  
+  prompts:
+    chain_of_thought: |
+      Question: {question}
+
+      Let's solve this step-by-step:
+
+      Answer:
+    
+    direct: |
+      Question: {question}
+      Answer:
+
+evaluation:
+  use_chain_of_thought: true
+  save_results: true
+  results_dir: "./results"
+  
+  metrics:
+    - "accuracy"
+    - "valid_prediction_ratio" 
+    - "quantization_stats"
+  
+  answer_patterns:
+    - r"####\s*([+-]?\d*\.?\d+)"
+    - r"[Aa]nswer[:\s]*([+-]?\d*\.?\d+)"
+    - r"[+-]?\d*\.?\d+"
+  
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+  save_logs: true
+  log_dir: "./logs"
+
+system:
+  device: "cuda:0"
+  mixed_precision: true
+  gradient_checkpointing: false
+  clear_cache_frequency: 50
+  torch_compile: false
