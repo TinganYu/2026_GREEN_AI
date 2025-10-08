@@ -128,7 +128,7 @@ if __name__ == "__main__":
 
     load_dotenv()
     HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
-    MODEL_PATH = "meta-llama/Llama-3.2-1B-Instruct"
+    MODEL_PATH = "facebook/opt-350m"
     MODEL_ID = MODEL_PATH.split("/")[-1].lower().replace("instruct", "it")
     OUTDIR = f"quant_models/{MODEL_ID}-gptq-test"
 

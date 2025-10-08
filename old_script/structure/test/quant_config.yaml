@@ -1,6 +1,6 @@
 # Model Configuration File for Quantization integration
 model:
-  name: "facebook/opt-350m"  # facebook/opt-350m, meta-llama/Llama-3.2-1B-Instruct
+  name: "meta-llama/Llama-3.2-1B-Instruct"  # facebook/opt-350m, meta-llama/Llama-3.2-1B-Instruct
   
   # Model loading parameters
   torch_dtype: "float16"
@@ -10,7 +10,7 @@ model:
 
 quantization:
   enabled: true
-  framework: "gptq"   # 可選: gptq, awq, bnb
+  framework: "awq"   # 可選: gptq, awq, bnb
 
   gptq:
     bits: 4

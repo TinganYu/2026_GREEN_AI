@@ -1,0 +1,117 @@
+model:
+  name: "meta-llama/Llama-3.2-1B-Instruct"  # facebook/opt-350m, meta-llama/Llama-3.2-1B-Instruct, quantized/gptq
+  
+  # Model loading parameters
+  torch_dtype: "float16"
+  device_map: "cuda:0"
+  trust_remote_code: true
+  low_cpu_mem_usage: true
+
+quantization:
+  enabled: true
+  # save_model: true
+  framework: "bnb"   # 可選: gptq, awq, bnb
+
+  methods:
+    gptq:
+      bits: 4
+      group_size: -1          # -1 表示不分組
+      damp_percent: 0.01
+      desc_act: true
+      sym: true
+      true_sequential: true
+      calib_num: 32
+      output_dir: "quantized/gptq"
+
+    awq:
+      zero_point: true
+      q_group_size: 128
+      w_bit: 4
+      version: "gemm"         # 選項: gemm, gemv, marlin, gemv_fast
+      modules_to_not_convert: []
+      output_dir: "quantized/awq"
+
+    bnb:
+      bits: 4
+      bnb_4bit_quant_type: "nf4"
+      bnb_4bit_use_double_quant: true
+      bnb_4bit_compute_dtype: "bfloat16"
+      llm_int8_threshold: 6.0
+      llm_int8_skip_modules: []
+      llm_int8_has_fp16_weight: false
+      llm_int8_enable_fp32_cpu_offload: false
+      output_dir: "quantized/bnb"
+
+dataset:
+  name: "gsm8k"
+  config: "main"
+  split: "test"
+  num_samples: 50
+  max_new_tokens: 512
+  do_sample: false
+  batch_size: 2
+  temperature: 0.0
+  top_p: 1.0
+  
+  prompts:
+    # Few-shot prompting (8-shot, 預設使用內建範例)
+    fewshot:
+      enabled: true
+      num_shots: 8
+      # 可選：自訂範例（若不設定則使用內建的 8 個範例）
+      # custom_examples:
+      #   - question: "..."
+      #     answer: "..."
+    
+    # Chain-of-thought prompting
+    chain_of_thought: |
+      Question: {question}
+
+      Let's solve this step-by-step:
+
+      Answer:
+    
+    # Direct prompting
+    direct: |
+      Question: {question}
+      Answer:
+    
+
+evaluation:
+  prompt_type: "fewshot"  # 可選: "direct", "fewshot", "cot" (chain_of_thought)
+  save_results: true
+  results_dir: "./results"
+  
+  metrics:
+    - "accuracy"
+    - "valid_prediction_ratio" 
+    - "quantization_stats"
+  
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+  save_logs: true
+  log_dir: "./logs"
+
+system:
+  device: "auto" #'cuda:1'
+  mixed_precision: true
+  gradient_checkpointing: false
+  clear_cache_frequency: 50
+  torch_compile: false
+
+# tuning:
+#   # Hyperparameter tuning settings
+#   enabled: true
+#   method: "grid_search"  # 可選: grid_search, random_search, bayesian_optimization
+#   adaptive: false
+#   max_trials: 20
+#   early_stopping: true
+#   patience: 3
+#   metric: "accuracy"
+#   direction: "maximize"
+#   param_grid:
+#     temperature: [0.0, 0.3, 0.7]
+#     top_p: [0.7, 0.9, 1.0]
+#     max_new_tokens: [100, 150]
+#     repetition_penalty: [1.0, 1.2, 1.5]
