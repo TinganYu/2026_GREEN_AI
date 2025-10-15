@@ -1,97 +1,137 @@
-# Model Configuration File for kvpress integration
+# # Model Configuration File for kvpress integration
+# model:
+#   name: "nvidia/Llama-3.1-Minitron-4B-Width-Base"
+  
+#   # Model loading parameters
+#   torch_dtype: "float16"
+#   device_map: "cuda:0"  # Change to "cpu" if no GPU is available
+#   trust_remote_code: true
+#   low_cpu_mem_usage: true
+#   attn_implementation: "eager"  # kvpress works with eager attention
+  
+# generation:
+#   # Default generation parameters
+#   max_new_tokens: 512
+#   temperature: 0.7
+#   do_sample: true
+#   top_p: 0.9
+#   top_k: 50
+#   repetition_penalty: 1.1
+  
+#   # Math-specific generation (for GSM8K)
+#   math:
+#     temperature: 0.1
+#     max_new_tokens: 1024
+#     do_sample: false
+    
+# kv_compression:
+#   # KV Cache compression settings using kvpress
+#   enabled: false
+#   compression_ratio: 0.5  # Keep 50% of tokens
+  
+#   # Available methods: snapkv, observed_attention, streaming_llm, knorm, expected_attention
+#   compression_method: "snapkv"
+  
+#   # Compression frequency (used by custom implementation)
+#   compression_frequency: 32
+  
+#   # Method-specific parameters for kvpress
+#   methods:
+#     snapkv:
+#       window_size: 32      # Recent tokens window
+#       kernel_size: 5       # Pooling kernel for important token selection
+    
+#     observed_attention:
+#       # Uses actual attention patterns from forward pass
+#       # No additional parameters needed
+#       pass
+    
+#     streaming_llm:
+#       window_size: 512     # Sliding window size
+    
+#     knorm:
+#       # Uses key norm for importance
+#       # No additional parameters needed
+#       pass
+    
+#     expected_attention:
+#       # Uses expected attention patterns
+#       # No additional parameters needed  
+#       pass
+  
+# dataset:
+#   name: "gsm8k"
+#   config: "main"
+#   split: "test"
+#   num_samples: 10
+  
+#   prompts:
+#     chain_of_thought: |
+#       Question: {question}
+
+#       Let's solve this step-by-step:
+
+#       Answer:
+    
+#     direct: |
+#       Question: {question}
+#       Answer:
+
+# evaluation:
+#   use_chain_of_thought: true
+#   save_results: true
+#   results_dir: "./results"
+  
+#   metrics:
+#     - "accuracy"
+#     - "valid_prediction_ratio" 
+#     - "compression_stats"
+  
+#   answer_patterns:
+#     - r"####\s*([+-]?\d*\.?\d+)"
+#     - r"[Aa]nswer[:\s]*([+-]?\d*\.?\d+)"
+#     - r"[+-]?\d*\.?\d+"
+  
+# logging:
+#   level: "INFO"
+#   format: "%(asctime)s - %(levelname)s - %(message)s"
+#   save_logs: true
+#   log_dir: "./logs"
+
+# system:
+#   device: "cuda:0"  # Change to "cpu" if no GPU is available
+#   mixed_precision: true
+#   gradient_checkpointing: false
+#   clear_cache_frequency: 50
+#   torch_compile: false
+
+# tuning:
+#   # Hyperparameter tuning settings
+#   enabled: false
+#   adaptive: false
+  
+#   # kvpress method options
+#   # Available: snapkv, observed_attention, streaming_llm, knorm, expected_attention
+#   compression_methods_to_test: 
+#       - "snapkv"           # Fast, good for most cases, Attention-Based -> less attended tokens get removed
+#       - "observed_attention"  # More accurate but slower,  Attention-Based -> less attended tokens get removed
+#       - "knorm"            # Fastest, simple, Magnitude-Based -> small value get removed
+#       # - "streaming_llm"    # Good for long contexts  
+      
+#   # Compression ratios to test (fraction of tokens to keep)
+#   compression_ratios_to_test: [0.75, 0.5, 0.3]
+
+# ============================================
+# SHARED CONFIGURATION (All Tasks)
+# ============================================
 model:
   name: "nvidia/Llama-3.1-Minitron-4B-Width-Base"
-  
-  # Model loading parameters
   torch_dtype: "float16"
-  device_map: "cuda:0" #"cuda:1"
+  device_map: "cuda:1"
   trust_remote_code: true
   low_cpu_mem_usage: true
-  attn_implementation: "eager"  # kvpress works with eager attention
-  
-generation:
-  # Default generation parameters
-  max_new_tokens: 512
-  temperature: 0.7
-  do_sample: true
-  top_p: 0.9
-  top_k: 50
-  repetition_penalty: 1.1
-  
-  # Math-specific generation (for GSM8K)
-  math:
-    temperature: 0.1
-    max_new_tokens: 1024
-    do_sample: false
-    
-kv_compression:
-  # KV Cache compression settings using kvpress
-  enabled: true
-  compression_ratio: 0.5  # Keep 50% of tokens
-  
-  # Available methods: snapkv, observed_attention, streaming_llm, knorm, expected_attention
-  compression_method: "snapkv"
-  
-  # Compression frequency (used by custom implementation)
-  compression_frequency: 32
-  
-  # Method-specific parameters for kvpress
-  methods:
-    snapkv:
-      window_size: 32      # Recent tokens window
-      kernel_size: 5       # Pooling kernel for important token selection
-    
-    observed_attention:
-      # Uses actual attention patterns from forward pass
-      # No additional parameters needed
-      pass
-    
-    streaming_llm:
-      window_size: 512     # Sliding window size
-    
-    knorm:
-      # Uses key norm for importance
-      # No additional parameters needed
-      pass
-    
-    expected_attention:
-      # Uses expected attention patterns
-      # No additional parameters needed  
-      pass
-  
-dataset:
-  name: "gsm8k"
-  config: "main"
-  split: "test"
-  num_samples: 50
-  
-  prompts:
-    chain_of_thought: |
-      Question: {question}
+  attn_implementation: "eager"
 
-      Let's solve this step-by-step:
-
-      Answer:
-    
-    direct: |
-      Question: {question}
-      Answer:
-
-evaluation:
-  use_chain_of_thought: true
-  save_results: true
-  results_dir: "./results"
-  
-  metrics:
-    - "accuracy"
-    - "valid_prediction_ratio" 
-    - "compression_stats"
-  
-  answer_patterns:
-    - r"####\s*([+-]?\d*\.?\d+)"
-    - r"[Aa]nswer[:\s]*([+-]?\d*\.?\d+)"
-    - r"[+-]?\d*\.?\d+"
-  
 logging:
   level: "INFO"
   format: "%(asctime)s - %(levelname)s - %(message)s"
@@ -99,24 +139,145 @@ logging:
   log_dir: "./logs"
 
 system:
-  device: "cuda:0" #'cuda:1'
+  device: "cuda:1"
   mixed_precision: true
   gradient_checkpointing: false
   clear_cache_frequency: 50
   torch_compile: false
 
-tuning:
-  # Hyperparameter tuning settings
+# Shared KV compression defaults (can be overridden per task)
+kv_compression:
   enabled: true
-  adaptive: false
+  compression_ratio: 0.5
+  compression_method: "snapkv"
+  compression_frequency: 32
   
-  # kvpress method options
-  # Available: snapkv, observed_attention, streaming_llm, knorm, expected_attention
+  methods:
+    snapkv:
+      window_size: 32
+      kernel_size: 5
+    observed_attention:
+      pass
+    streaming_llm:
+      window_size: 512
+    knorm:
+      pass
+    expected_attention:
+      pass
+
+# Shared tuning defaults (can be overridden per task)
+tuning:
+  enabled: false
+  adaptive: false
   compression_methods_to_test: 
-      - "snapkv"           # Fast, good for most cases
-      - "observed_attention"  # More accurate but slower
-      - "knorm"            # Fastest, simple
-      # - "streaming_llm"    # Good for long contexts  
-      
-  # Compression ratios to test (fraction of tokens to keep)
+    - "snapkv"
+    - "observed_attention"
+    - "knorm"
   compression_ratios_to_test: [0.75, 0.5, 0.3]
+
+# Keep this at root (default for all tasks)
+generation:
+  max_new_tokens: 512
+  temperature: 0.7
+  do_sample: true
+  top_p: 0.9
+  top_k: 50
+  repetition_penalty: 1.1
+
+# ============================================
+# TASK-SPECIFIC CONFIGURATIONS
+# Everything is explicit here!
+# ============================================
+tasks:
+  # GSM8K Math Reasoning
+  gsm8k:
+    dataset:
+      name: "gsm8k"
+      config: "main"
+      split: "test"
+      num_samples: 1500
+      
+      prompts:
+        chain_of_thought: |
+          Question: {question}
+
+          Let's solve this step-by-step:
+
+          Answer:
+        
+        direct: |
+          Question: {question}
+          Answer:
+    
+    generation:
+      max_new_tokens: 1024
+      temperature: 0.1
+      do_sample: false
+      top_p: 0.9
+      top_k: 50
+      repetition_penalty: 1.1
+    
+    evaluation:
+      use_chain_of_thought: true
+      save_results: true
+      results_dir: "./results"
+      
+      metrics:
+        - "accuracy"
+        - "valid_prediction_ratio" 
+        - "compression_stats"
+      
+      answer_patterns:
+        - r"####\s*([+-]?\d*\.?\d+)"
+        - r"[Aa]nswer[:\s]*([+-]?\d*\.?\d+)"
+        - r"[+-]?\d*\.?\d+"
+  
+  # MultiNews Summarization
+  multinews:
+    dataset:
+      name: "alexfabbri/multi_news"
+      split: "test"
+      num_samples: 50
+      max_input_tokens: 4096
+      
+      prompts:
+        summarization: |
+          Read the following news articles and write a comprehensive summary that captures the main points:
+
+          {document}
+
+          Summary:
+    
+    generation:
+      max_new_tokens: 256
+      temperature: 0.7
+      do_sample: true
+      top_p: 0.95
+      top_k: 50
+      repetition_penalty: 1.3
+    
+    evaluation:
+      save_results: true
+      results_dir: "./results"
+      
+      metrics:
+        - "rouge_scores"
+        - "compression_stats"
+      
+      rouge:
+        use_stemmer: true
+        metrics: ["rouge1", "rouge2", "rougeL"]
+    
+    # Task-specific KV compression overrides
+    kv_compression:
+      methods:
+        snapkv:
+          window_size: 128  # Larger for long documents
+          kernel_size: 7
+        streaming_llm:
+          window_size: 1024
+    
+    # Task-specific tuning
+    tuning:
+      enabled: true
+      adaptive: false

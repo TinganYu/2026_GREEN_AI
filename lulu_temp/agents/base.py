@@ -194,7 +194,8 @@ class ConfigurableBaseAgent:
         
     def _setup_generation_config(self):
         """Setup generation configuration"""
-        gen_config = self.config['generation']
+        # gen_config = self.config['generation']
+        gen_config = self.config.get('generation', {})
         
         self.generation_config = GenerationConfig(
             max_new_tokens=gen_config.get('max_new_tokens', 512),
@@ -235,10 +236,19 @@ class ConfigurableBaseAgent:
         input_ids = self.encode_text(prompt)
         
         # Get mode-specific config
-        if mode == "math":
-            gen_params = self.config['generation']['math'].copy()
-        else:
-            gen_params = {
+        # if mode == "math":
+        #     gen_params = self.config['generation']['math'].copy()
+        # else:
+        #     gen_params = {
+        #         'max_new_tokens': self.generation_config.max_new_tokens,
+        #         'temperature': self.generation_config.temperature,
+        #         'do_sample': self.generation_config.do_sample,
+        #         'top_p': self.generation_config.top_p,
+        #         'top_k': self.generation_config.top_k,
+        #         'repetition_penalty': self.generation_config.repetition_penalty
+        #     }
+
+        gen_params = {
                 'max_new_tokens': self.generation_config.max_new_tokens,
                 'temperature': self.generation_config.temperature,
                 'do_sample': self.generation_config.do_sample,

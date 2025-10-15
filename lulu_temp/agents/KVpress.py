@@ -127,10 +127,10 @@ class KVPressAgent(ConfigurableBaseAgent):
         # Generation configuration
         gen_config = self.config.get('generation', {})
         if max_new_tokens is None:
-            if mode == "math":
-                max_new_tokens = gen_config.get('math', {}).get('max_new_tokens', 1024)
-            else:
-                max_new_tokens = gen_config.get('max_new_tokens', 512)
+            # if mode == "math":
+            #     max_new_tokens = gen_config.get('math', {}).get('max_new_tokens', 1024)
+            # else:
+            max_new_tokens = gen_config.get('max_new_tokens', 512)
 
         # Tokenize prompt
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
@@ -150,8 +150,8 @@ class KVPressAgent(ConfigurableBaseAgent):
             'output_hidden_states': False,
         }
 
-        if mode == "math":
-            gen_params.update({'do_sample': False, 'num_beams': 1})
+        # if mode == "math":
+        #     gen_params.update({'do_sample': False, 'num_beams': 1})
 
         # Update with any extra kwargs
         gen_params.update(kwargs)
@@ -175,8 +175,9 @@ class KVPressAgent(ConfigurableBaseAgent):
 
                 if estimated_tokens >= min_tokens_for_compression:
                     # Apply compression normally
-                    start_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
-                    end_time   = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
+                    use_cuda = ((self.device=="cuda:0" or self.device=="cuda:1") and torch.cuda.is_available())
+                    start_time = torch.cuda.Event(enable_timing=True) if use_cuda else None
+                    end_time   = torch.cuda.Event(enable_timing=True) if use_cuda else None
                     if start_time: start_time.record()
 
                     with self.press(self.model):
@@ -192,13 +193,76 @@ class KVPressAgent(ConfigurableBaseAgent):
                         self.compression_stats['compression_time'] = start_time.elapsed_time(end_time) / 1000.0  # seconds
 
                     # Extract compressed past_key_values for stats
-                    past_kvs = getattr(outputs, "past_key_values", None)
+                    past_kvs = getattr(outputs, "past_key_values", None)   
                     if past_kvs is not None:
-                        total_tokens = sum(layer[0].shape[1] for layer in past_kvs)
-                        self.compression_stats['compressed_tokens'] = total_tokens
-                        self.compression_stats['total_compressions'] = len(past_kvs)
-                        self.compression_stats['tokens_saved'] = self.compression_stats['original_tokens'] - total_tokens
-                        self.compression_stats['compression_ratio'] = total_tokens / self.compression_stats['original_tokens']
+                        # num_layers is length of the top-level tuple
+                        num_layers = len(past_kvs)
+
+                        # helper: find a representative tensor in the nested structure
+                        def _find_example_tensor(past):
+                            for layer in past:
+                                # layer can be a tuple/list of tensors (k, v) or more
+                                for part in layer:
+                                    if isinstance(part, torch.Tensor) and part.dim() >= 3:
+                                        return part
+                            return None
+
+                        example = _find_example_tensor(past_kvs)
+                        if example is None:
+                            # unexpected structure — fall back to a safe default
+                            seq_len = None
+                            batch_size = input_ids.shape[0]
+                            num_heads = None
+                            head_dim = None
+                        else:
+                            # common HF layout: (batch, num_heads, seq_len, head_dim)
+                            # but be defensive: check dims and fallback to -2
+                            batch_size = example.size(0)
+                            if example.dim() >= 4:
+                                # most likely layout
+                                num_heads = example.size(1)
+                                seq_len = example.size(2)
+                                head_dim = example.size(3)
+                            elif example.dim() == 3:
+                                # shape could be (batch, seq_len, head_dim) in some cases
+                                # assume seq_len is middle dim
+                                num_heads = None
+                                seq_len = example.size(1)
+                                head_dim = example.size(2)
+                            else:
+                                seq_len = example.size(-2)
+                                num_heads = None
+                                head_dim = example.size(-1)
+
+                        # Update stats properly
+                        # - compressed_tokens is seq_len (per sequence)
+                        # - num_layers returns the number of layers (useful)
+                        # - total_compression_calls increments each time compression actually ran
+                        self.compression_stats['num_layers'] = num_layers
+                        self.compression_stats['batch_size'] = batch_size
+                        self.compression_stats['num_heads'] = num_heads
+                        self.compression_stats['head_dim'] = head_dim
+                        if seq_len is not None:
+                            self.compression_stats['compressed_tokens'] = seq_len
+                            self.compression_stats['tokens_saved'] = max(0, self.compression_stats['original_tokens'] - seq_len)
+                            # keep a separate counter of how many times compression was applied
+                            self.compression_stats['total_compressions'] = self.compression_stats.get('total_compressions', 0) + 1
+                            if self.compression_stats['original_tokens'] > 0:
+                                self.compression_stats['compression_ratio'] = 1-(seq_len / float(self.compression_stats['original_tokens']))
+                        else:
+                            # couldn't infer seq_len — leave values as None / 0
+                            self.compression_stats['compressed_tokens'] = None
+                    # if past_kvs is not None:
+                    #     seq_len = past_kvs[0][0].shape[2]
+                    #     self.compression_stats['compressed_tokens'] = seq_len
+                    #     self.compression_stats['total_compressions'] = len(past_kvs)
+                    #     self.compression_stats['tokens_saved'] = (
+                    #         self.compression_stats['original_tokens'] - seq_len
+                    #     )
+                    #     if self.compression_stats['original_tokens'] > 0:
+                    #         self.compression_stats['compression_ratio'] = (
+                    #             seq_len / self.compression_stats['original_tokens']
+                    #         )
                 else:
                     # Sequence too short → skip compression
                     outputs = self.model.generate(
@@ -216,8 +280,6 @@ class KVPressAgent(ConfigurableBaseAgent):
             raise RuntimeError(f"Compressed generation failed: {e}")
 
 
-
-
     def get_compression_stats(self) -> Dict:
         """Get compression statistics"""
         stats = self.compression_stats.copy()
@@ -226,7 +288,7 @@ class KVPressAgent(ConfigurableBaseAgent):
         orig = stats.get('original_tokens', 0)
         comp = stats.get('compressed_tokens', 0)
         if orig > 0:
-            stats['compression_ratio'] = comp / orig
+            stats['compression_ratio'] = 1- (comp / orig)
             stats['tokens_saved'] = orig - comp
         else:
             stats['compression_ratio'] = None
