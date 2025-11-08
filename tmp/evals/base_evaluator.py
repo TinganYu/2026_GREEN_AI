@@ -57,7 +57,7 @@ class BaseEvalConfig:
 
     hf_token: Optional[str] = None
     device_map: str = "cuda:0"
-    torch_dtype: str = "float16"
+    dtype: str = "float16"
     trust_remote_code: bool = True
     use_safetensors: bool = True
 
@@ -168,78 +168,35 @@ class BaseEvaluator(ABC):
             "float32": torch.float32,
             "bfloat16": torch.bfloat16,
         }
-        torch_dtype = dtype_map.get(self.config.torch_dtype, torch.float16)
+        dtype = dtype_map.get(self.config.dtype, torch.float16)
         
         self.model = AutoModelForCausalLM.from_pretrained(
             self.config.model_path,
             device_map=self.config.device_map,
-            torch_dtype=torch_dtype,
+            dtype=dtype,
             trust_remote_code=self.config.trust_remote_code,
             token=self.config.hf_token
         )
     
     def _load_gptq_model(self):
-        """載入 GPTQ 量化模型（優化版本，處理 vocab 不匹配和 CUDA 錯誤）"""
+        """載入 GPTQ 量化模型"""
         logger.info("🔹 載入 GPTQ 量化模型...")
-        
+
         try:
-            from auto_gptq import AutoGPTQForCausalLM
+            from gptqmodel import GPTQModel
         except ImportError:
-            raise ImportError("請安裝 auto-gptq: pip install auto-gptq")
-        
-        # 載入策略：嘗試多種方法
-        load_successful = False
-        last_error = None
-        
-        # 策略 1: 使用 from_quantized (推薦方式)
-        logger.info("📦 策略 1: 使用 from_quantized 載入...")
+            raise ImportError("請安裝 gptqmodel: pip install gptqmodel")
+
+        # 嘗試載入 GPTQ 模型
         try:
-            self.model = AutoGPTQForCausalLM.from_quantized(
+            self.model = GPTQModel.from_quantized(
                 self.config.model_path,
-                device=self.config.device_map,
-                use_safetensors=self.config.use_safetensors,
                 trust_remote_code=self.config.trust_remote_code,
-                use_triton=False,
-                warmup_triton=False,
-                disable_exllama=True,  # 禁用可能有問題的加速
-                disable_exllamav2=True,
+                use_safetensors=self.config.use_safetensors,
             )
-            
-            load_successful = True
-            logger.info(f"✅ 策略 1 成功! vocab_size={self.model.config.vocab_size}")
-            
         except Exception as e:
-            last_error = e
-            logger.warning(f"❌ 策略 1 失敗: {e}")
-        
-        # 策略 2: 禁用所有加速選項
-        if not load_successful:
-            logger.info("📦 策略 2: 禁用所有加速選項...")
-            try:
-                self.model = AutoGPTQForCausalLM.from_quantized(
-                    self.config.model_path,
-                    device_map=self.config.device_map,
-                    use_safetensors=self.config.use_safetensors,
-                    trust_remote_code=self.config.trust_remote_code,
-                    use_triton=False,
-                    inject_fused_attention=False,
-                    inject_fused_mlp=False,
-                    disable_exllama=True,
-                    disable_exllamav2=True,
-                )
-                
-                load_successful = True
-                logger.info(f"✅ 策略 2 成功!")
-                
-            except Exception as e:
-                last_error = e
-                logger.warning(f"❌ 策略 2 失敗: {e}")
-        
-        # 如果所有策略都失敗
-        if not load_successful:
-            error_msg = f"所有載入策略都失敗。最後錯誤: {last_error}"
-            logger.error(f"❌ {error_msg}")
-            raise RuntimeError(error_msg)
+            logger.error(f"❌ 載入 GPTQ 模型失敗: {e}")
+            raise
         
         # 最終驗證
         logger.info("🔍 驗證模型配置...")
@@ -340,6 +297,27 @@ class BaseEvaluator(ABC):
         )
 
         logger.info("✅ 模型生成管線初始化完成")
+    
+    def get_quantization_config(self) -> Optional[Dict[str, Any]]:
+        """取得量化配置內容"""
+        config_path = Path(self.config.model_path) / "config.json"
+        if not config_path.exists():
+            logger.info(f"📁 未找到量化配置檔案: {config_path}")
+            return None
+
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+        except Exception as exc:
+            logger.warning(f"⚠️ 讀取量化配置失敗: {exc}")
+            return None
+
+        quant_config = config_data.get("quantization_config")
+        if quant_config is None:
+            logger.info("ℹ️ config.json 未包含 quantization_config")
+        else:
+            logger.info(f"✅ 取得 quantization_config: {list(quant_config.keys())}")
+        return quant_config
     
     def save_results(self, results: Dict[str, Any], filename: Optional[str] = None):
         """

@@ -2,12 +2,7 @@
 統一量化工具
 =====================
 
-整合 GPTQ、AWQ、BNB 三種量化方法的完整實現（優化架構版本）
-
-主要改進:
-- 分離的配置類 (GPTQConfig, AWQConfig, BNBConfig)
-- 統一的 Quantizer 類封裝所有量化邏輯
-- 更清晰的代碼結構和錯誤處理
+整合 GPTQ、AWQ、BNB 三種量化方法的完整實現
 
 使用方式:
     from quantization_unified import Quantizer, GPTQConfig, AWQConfig, BNBConfig
@@ -22,6 +17,7 @@
     output = quantizer.quantize_awq(bits=4)
 """
 
+from datetime import datetime
 import gc
 import logging
 from abc import ABC, abstractmethod
@@ -33,25 +29,19 @@ import torch
 from transformers import AutoTokenizer
 
 
-# ============================================================================
-# 日誌配置
-# ============================================================================
-
 logger = logging.getLogger("Quantization")
 logger.setLevel(logging.INFO)
 
 if not logger.handlers:
-    ch = logging.StreamHandler()
-    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s | %(levelname)s | %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(handler)
 
 logger.propagate = False
 
-
-# ============================================================================
-# 配置類
-# ============================================================================
 
 @dataclass
 class BaseQuantConfig(ABC):
@@ -85,12 +75,20 @@ class GPTQConfig(BaseQuantConfig):
     
     專用參數:
         bits: 量化位元數 (2, 3, 4, 8)
-        group_size: 分組大小 (-1 表示不分組，建議 128)
-        damp_percent: 阻尼百分比，用於穩定量化過程 (預設 0.01)
+        group_size: 分組大小 (-1 表示不分組，建議 128，預設 128)
+        damp_percent: 阻尼百分比，用於穩定量化過程 (None 表示自動計算)
+        damp_auto_increment: 阻尼自動遞增幅度，協助在校準期間逐步調整阻尼 (None 表示停用)
         desc_act: 是否使用降序激活順序 (預設 True)
+        act_group_aware: 是否啟用 activation group aware 的排序策略 (預設 False)
+        static_groups: 是否使用靜態分組權重 (預設 False)
         sym: 是否使用對稱量化 (預設 True)
         true_sequential: 是否使用真實順序量化 (預設 True)
-        calib_num: 校準樣本數量，更多樣本 = 更高精度但更慢 (預設 32)
+        lm_head: 是否同時量化 LM head 層 (預設 False)
+        mse: 量化過程的 MSE 正則化權重 (預設 0.0)
+        rotation: 權重旋轉策略 (可選 "hadamard" 或 "random"，預設 None)
+        v2: 是否啟用 GPTQ v2 流程 (預設 False)
+        v2_alpha: GPTQ v2 的 alpha 參數 (預設 0.25)
+        calib_num: 校準樣本數量，更多樣本 = 更高精度但更慢 (預設 256)
     
     範例:
         >>> config = GPTQConfig(
@@ -101,13 +99,21 @@ class GPTQConfig(BaseQuantConfig):
         ... )
     """
     bits: int = field(default=4, metadata={"choices": [2, 3, 4, 8]})
-    group_size: int = field(default=-1)
-    damp_percent: float = field(default=0.01)
+    group_size: int = field(default=128, metadata={"choices": [-1, 16, 32, 64, 128, 256, 512, 1024]})
+    damp_percent: Optional[float] = field(default=0.05)
+    damp_auto_increment: Optional[float] = field(default=0.01)
     desc_act: bool = field(default=True)
+    act_group_aware: bool = field(default=False)
+    static_groups: bool = field(default=False)
     sym: bool = field(default=True)
     true_sequential: bool = field(default=True)
-    calib_num: int = field(default=32)
-    
+    lm_head: bool = field(default=False)
+    mse: float = field(default=0.0)
+    rotation: Optional[str] = field(default=None, metadata={"choices": ["hadamard", "random"]})
+    v2: bool = field(default=False)
+    v2_alpha: float = field(default=0.25)
+    calib_num: int = 256
+
     @property
     def method_name(self) -> str:
         return "gptq"
@@ -123,9 +129,21 @@ class GPTQConfig(BaseQuantConfig):
         if self.calib_num < 1:
             raise ValueError(f"calib_num 必須 >= 1，得到: {self.calib_num}")
         
+        # 驗證 group_size
+        valid_group_sizes = self.__dataclass_fields__['group_size'].metadata.get('choices', [])
+        if self.group_size not in valid_group_sizes:
+            raise ValueError(f"group_size 必須是 {valid_group_sizes} 之一，得到: {self.group_size}")
+
         # 驗證 damp_percent
         if not 0 < self.damp_percent < 1:
             raise ValueError(f"damp_percent 必須在 0-1 之間，得到: {self.damp_percent}")
+
+        # 驗證 damp_auto_increment
+        if self.damp_auto_increment < 0:
+            raise ValueError(f"damp_auto_increment 必須 >= 0，得到: {self.damp_auto_increment}")
+
+        if self.act_group_aware and self.desc_act:
+            raise ValueError("`act_group_aware` == `True`時，需要 `desc_act` == `False`")
 
 
 @dataclass
@@ -290,7 +308,7 @@ class Quantizer:
     @staticmethod
     def _extract_model_id(model_path: str) -> str:
         """從路徑提取模型 ID"""
-        return model_path.split("/")[-1].lower().replace("instruct", "it")
+        return model_path.split("/")[-1]
     
     @property
     def tokenizer(self) -> AutoTokenizer:
@@ -323,8 +341,9 @@ class Quantizer:
         """生成輸出目錄"""
         if config.output_dir:
             return config.output_dir
-        return f"quant_models/{self.model_id}-{config.method_name}-{config.bits}bit"
-    
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"quantized/{self.model_id}-{config.method_name}-{config.bits}bit-{ts}"
+
     def _log_start(self, method: str):
         """記錄開始訊息"""
         logger.info("=" * 80)
@@ -346,13 +365,12 @@ class Quantizer:
     def _quantize_gptq(self, config: GPTQConfig) -> str:
         """執行 GPTQ 量化"""
         try:
-            from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
-            from transformers import AutoConfig
+            from gptqmodel import GPTQModel, QuantizeConfig
             from datasets import load_dataset
         except ImportError:
             raise ImportError(
                 "❌ 請先安裝 GPTQ 依賴:\n"
-                "   pip install auto-gptq datasets"
+                "   pip install gptqmodel datasets"
             )
         
         self._log_start("GPTQ")
@@ -367,56 +385,43 @@ class Quantizer:
         
         # 建立量化配置
         logger.info("🔹 建立 GPTQ 配置...")
-        quant_config = BaseQuantizeConfig(
+        quant_config = QuantizeConfig(
             bits=config.bits,
             group_size=config.group_size,
             damp_percent=config.damp_percent,
+            damp_auto_increment=config.damp_auto_increment,
             desc_act=config.desc_act,
+            act_group_aware=config.act_group_aware,
+            static_groups=config.static_groups,
             sym=config.sym,
-            true_sequential=config.true_sequential
+            true_sequential=config.true_sequential,
+            lm_head=config.lm_head,
+            mse=config.mse,
+            rotation=config.rotation,
+            v2=config.v2,
+            v2_alpha=config.v2_alpha
         )
         logger.info(f"   • 配置: {quant_config}")
         
         # 載入模型
         logger.info("🔹 載入原始模型...")
         self._cleanup_memory()
-        
-        model = AutoGPTQForCausalLM.from_pretrained(
-            self.model_path,
-            quantize_config=quant_config,
-            low_cpu_mem_usage=True,
-            device_map="cuda:0",
-            token=config.hf_token
-        )
+
+        model = GPTQModel.load(self.model_path, quant_config)
+
         logger.info("   ✓ 模型載入完成")
         
         # 準備校準資料
         logger.info("🔹 準備校準資料...")
-        dataset = load_dataset("openai/gsm8k", "main", split="train")
-        dataset = dataset.select(range(config.calib_num))
-        
-        model_config = AutoConfig.from_pretrained(self.model_path)
-        max_len = model_config.max_position_embeddings
-        
-        examples = []
-        for ex in dataset:
-            text = ex["question"] + " " + ex["answer"]
-            tok = tokenizer(
-                text,
-                truncation=True,
-                padding="max_length",
-                max_length=max_len,
-                return_tensors="pt"
-            )
-            examples.append({
-                "input_ids": tok["input_ids"].squeeze(0),
-                "attention_mask": tok["attention_mask"].squeeze(0)
-            })
-        logger.info(f"   ✓ 準備了 {len(examples)} 個校準樣本")
-        
+        calibration_dataset = [
+            ex["question"] + " " + ex["answer"]
+            for ex in load_dataset("openai/gsm8k", "main", split="train").select(range(config.calib_num))
+        ]
+        logger.info(f"   ✓ 準備了 {len(calibration_dataset)} 個校準樣本")
+
         # 執行量化
         logger.info("🔹 開始量化（這可能需要較長時間）...")
-        model.quantize(examples=examples, batch_size=1)
+        model.quantize(calibration_dataset, batch_size=1)
         logger.info("   ✓ 量化完成")
         
         # 儲存
@@ -473,7 +478,19 @@ class Quantizer:
         
         # 執行量化
         logger.info("🔹 開始量化（這可能需要幾分鐘）...")
+        # 同步 GPU，準備正式計時
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+
         model.quantize(tokenizer, quant_config=quant_config)
+
+        # 統計 GPU 記憶體與 throughput
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            peak_memory = torch.cuda.max_memory_allocated() / (1024 ** 2)
+            logger.info(f"   • 量化過程中 GPU 峰值記憶體使用: {peak_memory:.2f} MB")
+
         logger.info("   ✓ 量化完成")
         
         # 儲存
@@ -513,7 +530,11 @@ class Quantizer:
             load_in_8bit=(config.bits == 8),
             bnb_4bit_quant_type=config.bnb_4bit_quant_type,
             bnb_4bit_use_double_quant=config.bnb_4bit_use_double_quant,
-            bnb_4bit_compute_dtype=getattr(torch, config.bnb_4bit_compute_dtype)
+            bnb_4bit_compute_dtype=getattr(torch, config.bnb_4bit_compute_dtype),
+            llm_int8_threshold=config.llm_int8_threshold,
+            llm_int8_skip_modules=config.llm_int8_skip_modules,
+            llm_int8_has_fp16_weight=config.llm_int8_has_fp16_weight,
+            llm_int8_enable_fp32_cpu_offload=config.llm_int8_enable_fp32_cpu_offload,
         )
         logger.info(f"   • 配置: {quant_config}")
         
@@ -644,195 +665,3 @@ class Quantizer:
     def list_methods() -> List[str]:
         """列出所有支援的量化方法"""
         return ["gptq", "awq", "bnb"]
-    
-    @staticmethod
-    def get_method_info(method: str) -> dict:
-        """獲取量化方法的詳細資訊"""
-        info = {
-            "gptq": {
-                "name": "GPTQ",
-                "description": "後訓練量化，高精度，需要校準資料",
-                "bits": [4, 8],
-                "config_class": "GPTQConfig",
-                "dependencies": ["auto-gptq", "datasets"]
-            },
-            "awq": {
-                "name": "AWQ",
-                "description": "激活感知權重量化，快速推理",
-                "bits": [4],
-                "config_class": "AWQConfig",
-                "dependencies": ["autoawq"]
-            },
-            "bnb": {
-                "name": "BitsAndBytes",
-                "description": "整合於 Transformers，易於使用",
-                "bits": [4, 8],
-                "config_class": "BNBConfig",
-                "dependencies": ["transformers", "bitsandbytes"]
-            }
-        }
-        
-        method = method.lower()
-        if method not in info:
-            raise ValueError(f"未知的方法: {method}。支援的方法: {list(info.keys())}")
-        
-        return info[method]
-
-
-# ============================================================================
-# 便利函數
-# ============================================================================
-
-def print_usage():
-    """打印使用說明"""
-    usage = """
-    ╔═══════════════════════════════════════════════════════════════╗
-    ║           統一量化工具 - 使用指南 (重構版)                     ║
-    ╚═══════════════════════════════════════════════════════════════╝
-    
-    📦 支援的量化方法:
-       • GPTQ: 高精度後訓練量化 (4/8-bit)
-       • AWQ:  激活感知權重量化 (4-bit)
-       • BNB:  BitsAndBytes 量化 (4/8-bit)
-    
-    🚀 快速開始:
-    
-       from quantization_unified import Quantizer, AWQConfig
-       
-       # 方法 1: 使用配置物件（推薦）
-       quantizer = Quantizer("meta-llama/Llama-3.2-1B-Instruct")
-       config = AWQConfig(bits=4, q_group_size=128)
-       output = quantizer.quantize(config)
-       
-       # 方法 2: 使用快捷方法
-       quantizer = Quantizer("meta-llama/Llama-3.2-1B-Instruct")
-       output = quantizer.quantize_awq(bits=4, q_group_size=128)
-    
-    📚 三種配置類:
-    
-       from quantization_unified import GPTQConfig, AWQConfig, BNBConfig
-       
-       # GPTQ 配置
-       gptq_config = GPTQConfig(
-           bits=4,
-           group_size=128,
-           calib_num=64,
-           output_dir="models/gptq"
-       )
-       
-       # AWQ 配置
-       awq_config = AWQConfig(
-           bits=4,
-           q_group_size=128,
-           version="gemm",
-           output_dir="models/awq"
-       )
-       
-       # BNB 配置
-       bnb_config = BNBConfig(
-           bits=4,
-           bnb_4bit_quant_type="nf4",
-           bnb_4bit_use_double_quant=True,
-           output_dir="models/bnb"
-       )
-    
-    💡 更多資訊:
-       • Quantizer.list_methods() - 列出支援的方法
-       • Quantizer.get_method_info(method) - 獲取方法詳情
-       • 每個配置類都有詳細的文檔字串
-    """
-    print(usage)
-
-
-def main():
-    """命令行接口"""
-    import argparse
-    
-    parser = argparse.ArgumentParser(
-        description="統一的模型量化工具（重構版）",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-範例:
-  # AWQ 量化
-  python quantization_unified.py meta-llama/Llama-3.2-1B-Instruct --method awq
-  
-  # GPTQ 量化，自訂參數
-  python quantization_unified.py facebook/opt-350m --method gptq --bits 4 --group-size 128
-  
-  # BNB 量化
-  python quantization_unified.py meta-llama/Llama-3.2-1B-Instruct --method bnb --bits 4
-        """
-    )
-    
-    parser.add_argument("model_path", help="模型路徑或 HuggingFace model ID")
-    parser.add_argument("--method", required=True, choices=["gptq", "awq", "bnb"],
-                       help="量化方法")
-    parser.add_argument("--bits", type=int, default=4, choices=[4, 8],
-                       help="量化位元數 (預設: 4)")
-    parser.add_argument("--output-dir", help="輸出目錄")
-    parser.add_argument("--hf-token", help="HuggingFace token")
-    
-    # GPTQ 參數
-    parser.add_argument("--group-size", type=int, default=-1,
-                       help="GPTQ: 分組大小")
-    parser.add_argument("--calib-num", type=int, default=32,
-                       help="GPTQ: 校準樣本數")
-    
-    # AWQ 參數
-    parser.add_argument("--q-group-size", type=int, default=128,
-                       help="AWQ: 量化分組大小")
-    parser.add_argument("--version", default="gemm",
-                       help="AWQ: 量化版本")
-    
-    # BNB 參數
-    parser.add_argument("--quant-type", default="nf4",
-                       help="BNB: 量化類型 (nf4/fp4)")
-    
-    args = parser.parse_args()
-    
-    # 創建量化器
-    quantizer = Quantizer(args.model_path)
-    
-    # 根據方法創建配置
-    try:
-        if args.method == "gptq":
-            config = GPTQConfig(
-                bits=args.bits,
-                output_dir=args.output_dir,
-                hf_token=args.hf_token,
-                group_size=args.group_size,
-                calib_num=args.calib_num
-            )
-        elif args.method == "awq":
-            config = AWQConfig(
-                bits=args.bits,
-                output_dir=args.output_dir,
-                hf_token=args.hf_token,
-                q_group_size=args.q_group_size,
-                version=args.version
-            )
-        else:  # bnb
-            config = BNBConfig(
-                bits=args.bits,
-                output_dir=args.output_dir,
-                hf_token=args.hf_token,
-                bnb_4bit_quant_type=args.quant_type
-            )
-        
-        # 執行量化
-        output_path = quantizer.quantize(config)
-        logger.info(f"\n🎉 量化成功完成!\n📁 輸出路徑: {output_path}\n")
-        
-    except Exception as e:
-        logger.error(f"\n❌ 量化失敗: {e}\n")
-        raise
-
-
-if __name__ == "__main__":
-    # 如果有命令行參數，使用命令行模式
-    import sys
-    if len(sys.argv) > 1:
-        main()
-    else:
-        # 否則打印使用說明
-        print_usage()

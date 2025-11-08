@@ -56,13 +56,13 @@ class TruthfulQAEvaluator(BaseEvaluator):
         question = sample["question"]
         
         if self.config.prompt_type == "multiple_choice":
-            return self._build_mc_prompt(question, sample["mc1_targets"])
+            return self._build_mc_prompt(question, sample["mc1_targets"]["choices"])
         else:
             raise ValueError(f"暫不支援的任務類型: {self.config.prompt_type}")
         
     def _build_mc_prompt(self, question: str, choices: List[str]) -> str:
         """構建多選題提示詞"""
-        choices = [f"{chr(65+i)}. {choice}" for i, choice in enumerate(choices)]
+        choices = " ".join([f"{chr(65+i)}. {choice}" for i, choice in enumerate(choices)])
         try:
             messages = [
                 {"role": "user", "content": self.config.prompts["multiple_choice"].format(question=question, choices=choices)}
@@ -183,7 +183,7 @@ class TruthfulQAEvaluator(BaseEvaluator):
             f.write(header)
             for idx, sample in enumerate(dataset):
                 question = sample["question"]
-                choices = [f"{chr(65+i)}. {choice}" for i, choice in enumerate(sample["mc1_targets"])]
+                choices = " ".join([f"{chr(65+i)}. {choice}" for i, choice in enumerate(sample["mc1_targets"]["choices"])])
                 true_answer = chr(sample["mc1_targets"]["labels"].index(1) + 65)
                 
                 prompt = self.build_prompt(sample)
@@ -240,7 +240,7 @@ class TruthfulQAEvaluator(BaseEvaluator):
                 f.write(f"{'='*80}\n")
                 f.write(f"問題 #{idx + 1}\n")
                 f.write(f"{'='*80}\n")
-                f.write(f"問題: {question}\n")
+                f.write(f"問題: {question} {choices}\n")
                 f.write(f"標準答案: {true_answer}\n")
                 f.write(f"模型輸出:\n{output}\n")
                 f.write(f"提取答案: {pred_answer}\n")
@@ -289,5 +289,6 @@ class TruthfulQAEvaluator(BaseEvaluator):
             "total_output_tokens": total_generated_tokens,
             "total_generation_time_sec": round(total_generation_time, 4),
             "throughput_tokens_per_sec": round(throughput, 4),
+            "quantization_config": self.get_quantization_config(),
             "results": self.results
         }

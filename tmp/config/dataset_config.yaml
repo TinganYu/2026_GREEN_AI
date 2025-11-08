@@ -8,7 +8,7 @@
 common:
   # 模型配置
   device_map: "cuda:0"
-  torch_dtype: "float16"  # float16, float32, bfloat16
+  dtype: "float16"  # float16, float32, bfloat16
   trust_remote_code: true
   use_safetensors: true
   

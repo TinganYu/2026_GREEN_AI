@@ -47,51 +47,25 @@ class QuantizationConfigLoader:
         """創建 GPTQ 配置"""
         params = self.config['quantization']['methods']['gptq']
         return GPTQConfig(
-            bits=params['bits'],
-            group_size=params['group_size'],
-            damp_percent=params['damp_percent'],
-            desc_act=params['desc_act'],
-            sym=params['sym'],
-            true_sequential=params['true_sequential'],
-            calib_num=params['calib_num'],
-            output_dir=params.get('output_dir'),
+            **params,
             hf_token=hf_token
         )
     
     def get_awq_config(self, hf_token: str = None) -> AWQConfig:
         """創建 AWQ 配置"""
         params = self.config['quantization']['methods']['awq']
-        modules = params.get('modules_to_not_convert')
-        if modules is not None and len(modules) == 0:
-            modules = None
         
         return AWQConfig(
-            w_bit=params['w_bit'],
-            zero_point=params['zero_point'],
-            q_group_size=params['q_group_size'],
-            version=params['version'],
-            modules_to_not_convert=modules,
-            output_dir=params.get('output_dir'),
+            **params,
             hf_token=hf_token
         )
     
     def get_bnb_config(self, hf_token: str = None) -> BNBConfig:
         """創建 BNB 配置"""
         params = self.config['quantization']['methods']['bnb']
-        skip_modules = params.get('llm_int8_skip_modules')
-        if skip_modules is not None and len(skip_modules) == 0:
-            skip_modules = None
         
         return BNBConfig(
-            bits=params['bits'],
-            bnb_4bit_quant_type=params['bnb_4bit_quant_type'],
-            bnb_4bit_use_double_quant=params['bnb_4bit_use_double_quant'],
-            bnb_4bit_compute_dtype=params['bnb_4bit_compute_dtype'],
-            llm_int8_threshold=params['llm_int8_threshold'],
-            llm_int8_skip_modules=skip_modules,
-            llm_int8_has_fp16_weight=params.get('llm_int8_has_fp16_weight', False),
-            llm_int8_enable_fp32_cpu_offload=params.get('llm_int8_enable_fp32_cpu_offload', False),
-            output_dir=params.get('output_dir'),
+            **params,
             hf_token=hf_token
         )
     

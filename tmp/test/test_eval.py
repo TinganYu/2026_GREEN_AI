@@ -142,8 +142,6 @@ def main():
             
             print(f"\n✅ {dataset_name.upper()} 評估完成")
             print(f"共 {results.get('total', 0)} 個樣本")
-            # print(f"   準確率: {results.get('accuracy', 0):.4f}")
-            # print(f"   正確: {results.get('correct', 0)}/{results.get('total', 0)}")
             
         except Exception as e:
             print(f"\n❌ {dataset_name} 評估失敗: {e}")

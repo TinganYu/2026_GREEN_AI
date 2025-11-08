@@ -1,26 +1,33 @@
 model:
-  name: "meta-llama/Llama-3.2-1B-Instruct"  # meta-llama/Llama-3.2-1B-Instruct, quant_models/llama-3.2-1b-it-gptq-test, quanitized/bnb
+  name: "meta-llama/Llama-3.2-1B-Instruct"  # meta-llama/Llama-3.2-1B-Instruct, quant_models/llama-3.2-1b-it-gptq-test, quantized/bnb
   
   # Model loading parameters
-  torch_dtype: "float16"
+  dtype: "float16"
   device_map: "cuda:0"
   trust_remote_code: true
-  low_cpu_mem_usage: true
 
 quantization:
   enabled: true
-  framework: "bnb"   # 可選: gptq, awq, bnb
+  framework: "gptq"   # 可選: gptq, awq, bnb
 
   methods:
     gptq:
       bits: 4
-      group_size: -1          # -1 表示不分組
-      damp_percent: 0.01
+      group_size: 128          # -1 表示不分組
+      damp_percent: 0.05
+      damp_auto_increment: 0.01
       desc_act: true
+      act_group_aware: False
+      static_groups: False
       sym: true
       true_sequential: true
-      calib_num: 32
-      output_dir: "quantized/gptq"
+      lm_head: False
+      mse: 0.0
+      rotation: null
+      v2: False
+      v2_alpha: 0.25
+      calib_num: 1024
+      output_dir: null  #"quantized/gptq"
 
     awq:
       zero_point: true
@@ -28,7 +35,7 @@ quantization:
       w_bit: 4
       version: "gemm"         # 選項: gemm, gemv, marlin, gemv_fast
       modules_to_not_convert: []
-      output_dir: "quantized/awq"
+      output_dir: null  #"quantized/awq"
 
     bnb:
       bits: 4
@@ -39,53 +46,14 @@ quantization:
       llm_int8_skip_modules: []
       llm_int8_has_fp16_weight: false
       llm_int8_enable_fp32_cpu_offload: false
-      output_dir: "quantized/bnb"
+      output_dir: null  #"quantized/bnb"
 
 dataset:
   # 選擇要評估的資料集（可以是列表）
-  selected: ["gsm8k", "truthfulqa", "commonsenseqa", "bbh", "humaneval"]  # 或 ["gsm8k", "truthfulqa", "commonsenseqa", "bbh", "humaneval"]
+  selected: ["gsm8k", "truthfulqa", "commonsenseqa", "humaneval", "bbh"]  # 或 ["gsm8k", "truthfulqa", "commonsenseqa", "humaneval", "bbh"]
   # 資料集詳細配置從 dataset_config.yaml 讀取
   config_file: "tmp/config/dataset_config.yaml"
   
   # 可以覆寫 dataset_config.yaml 中的參數
   override:
     num_samples: null  # null 表示使用 dataset_config.yaml 中的設定
-
-# evaluation:
-#   save_results: true
-#   results_dir: "./results"
-  
-#   # 評估指標
-#   metrics:
-#     - "accuracy"
-#     - "valid_prediction_ratio" 
-#     - "quantization_stats"
-  
-# logging:
-#   level: "INFO"
-#   format: "%(asctime)s - %(levelname)s - %(message)s"
-#   save_logs: true
-#   log_dir: "./logs"
-
-# system:
-#   device: "auto" #'cuda:1'
-#   mixed_precision: true
-#   gradient_checkpointing: false
-#   clear_cache_frequency: 50
-#   torch_compile: false
-
-# tuning:
-#   # Hyperparameter tuning settings
-#   enabled: true
-#   method: "grid_search"  # 可選: grid_search, random_search, bayesian_optimization
-#   adaptive: false
-#   max_trials: 20
-#   early_stopping: true
-#   patience: 3
-#   metric: "accuracy"
-#   direction: "maximize"
-#   param_grid:
-#     temperature: [0.0, 0.3, 0.7]
-#     top_p: [0.7, 0.9, 1.0]
-#     max_new_tokens: [100, 150]
-#     repetition_penalty: [1.0, 1.2, 1.5]

@@ -363,7 +363,10 @@ class BBHEvaluator(BaseEvaluator):
                     "task_name": task_result["task_name"],
                     "accuracy": task_result["accuracy"],
                     "correct": task_result["correct"],
-                    "total": task_result["total"]
+                    "total": task_result["total"],
+                    "gen_time": task_result["gen_time"],
+                    "prompt_tokens": task_result["prompt_tokens"],
+                    "output_tokens": task_result["output_tokens"],
                 })
                 total_generation_time += task_result["gen_time"]
                 total_prompt_tokens += task_result["prompt_tokens"]
@@ -407,5 +410,7 @@ class BBHEvaluator(BaseEvaluator):
             "total_output_tokens": total_generated_tokens,
             "total_generation_time_sec": round(total_generation_time, 4),
             "throughput_tokens_per_sec": round(throughput, 4),
+            "quantization_config": self.get_quantization_config(),
+            "task_results": task_results,
             "results": self.results
         }

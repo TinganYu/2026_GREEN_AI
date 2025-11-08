@@ -492,5 +492,6 @@ class GSM8KEvaluator(BaseEvaluator):
             "total_output_tokens": total_generated_tokens,
             "total_generation_time_sec": round(total_generation_time, 4),
             "throughput_tokens_per_sec": round(throughput, 4),
+            "quantization_config": self.get_quantization_config(),
             "results": self.results
         }
