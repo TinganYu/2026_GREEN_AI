@@ -8,13 +8,13 @@
     from quantization_unified import Quantizer, GPTQConfig, AWQConfig, BNBConfig
     
     # 方法 1: 使用專門的配置類
-    config = AWQConfig(bits=4, q_group_size=128)
+    config = AWQConfig(w_bit=4, q_group_size=128)
     quantizer = Quantizer(model_path="meta-llama/Llama-3.2-1B-Instruct")
     output = quantizer.quantize(config)
     
     # 方法 2: 快捷方法
     quantizer = Quantizer("meta-llama/Llama-3.2-1B-Instruct")
-    output = quantizer.quantize_awq(bits=4)
+    output = quantizer.quantize_awq(w_bit=4)
 """
 
 from datetime import datetime
@@ -152,7 +152,7 @@ class AWQConfig(BaseQuantConfig):
     AWQ 量化配置
     
     專用參數:
-        bits: 量化位元數 (預設 4)
+        w_bit: 量化位元數 (預設 4)
         zero_point: 是否使用零點量化 (預設 True)
         q_group_size: 量化分組大小，建議 128 (預設 128)
         version: 量化版本 (預設 "gemm")
@@ -164,7 +164,7 @@ class AWQConfig(BaseQuantConfig):
     
     範例:
         >>> config = AWQConfig(
-        ...     bits=4,
+        ...     w_bit=4,
         ...     q_group_size=128,
         ...     version="gemm",
         ...     output_dir="models/awq"
@@ -182,7 +182,7 @@ class AWQConfig(BaseQuantConfig):
     
     def validate(self):
         """驗證配置參數"""
-        # 驗證 bits
+        # 驗證 w_bit
         if self.w_bit != 4:
             raise ValueError(f"AWQ 目前只支援 4-bit 量化，得到: {self.w_bit}")
         
@@ -278,11 +278,11 @@ class Quantizer:
     使用範例:
         >>> # 基本使用
         >>> quantizer = Quantizer("meta-llama/Llama-3.2-1B-Instruct")
-        >>> config = AWQConfig(bits=4)
+        >>> config = AWQConfig(w_bit=4)
         >>> output = quantizer.quantize(config)
         
         >>> # 快捷方法
-        >>> output = quantizer.quantize_awq(bits=4, q_group_size=128)
+        >>> output = quantizer.quantize_awq(w_bit=4, q_group_size=128)
         >>> output = quantizer.quantize_gptq(bits=4, group_size=128)
         >>> output = quantizer.quantize_bnb(bits=4)
     """
@@ -342,7 +342,10 @@ class Quantizer:
         if config.output_dir:
             return config.output_dir
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return f"quantized/{self.model_id}-{config.method_name}-{config.bits}bit-{ts}"
+        if isinstance(config, AWQConfig):
+            return f"quantized/{self.model_id}-{config.method_name}-{config.w_bit}bit-{ts}"
+        elif isinstance(config, GPTQConfig) or isinstance(config, BNBConfig):
+            return f"quantized/{self.model_id}-{config.method_name}-{config.bits}bit-{ts}"
 
     def _log_start(self, method: str):
         """記錄開始訊息"""
@@ -580,7 +583,7 @@ class Quantizer:
         
         Examples:
             >>> quantizer = Quantizer("meta-llama/Llama-3.2-1B-Instruct")
-            >>> config = AWQConfig(bits=4, q_group_size=128)
+            >>> config = AWQConfig(w_bit=4, q_group_size=128)
             >>> output = quantizer.quantize(config)
         """
         # 驗證配置
@@ -632,7 +635,7 @@ class Quantizer:
         Examples:
             >>> quantizer = Quantizer("meta-llama/Llama-3.2-1B-Instruct")
             >>> output = quantizer.quantize_awq(
-            ...     bits=4,
+            ...     w_bit=4,
             ...     q_group_size=128,
             ...     version="gemm"
             ... )
