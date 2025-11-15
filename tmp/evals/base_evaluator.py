@@ -191,6 +191,7 @@ class BaseEvaluator(ABC):
         try:
             self.model = GPTQModel.from_quantized(
                 self.config.model_path,
+                device_map={"": self.config.device_map},  # 強制指定裝置
                 trust_remote_code=self.config.trust_remote_code,
                 use_safetensors=self.config.use_safetensors,
             )
@@ -233,6 +234,7 @@ class BaseEvaluator(ABC):
             self.model = AutoAWQForCausalLM.from_quantized(
                 self.config.model_path,
                 fuse_layers=True,
+                device_map={"": self.config.device_map},  # 強制指定裝置
                 trust_remote_code=self.config.trust_remote_code,
                 safetensors=self.config.use_safetensors,
             )
@@ -252,6 +254,7 @@ class BaseEvaluator(ABC):
                 self.model = AutoAWQForCausalLM.from_quantized(
                     self.config.model_path,
                     fuse_layers=False,  # 禁用可能有問題的優化
+                    device_map={"": self.config.device_map},  # 強制指定裝置
                     trust_remote_code=self.config.trust_remote_code,
                     safetensors=self.config.use_safetensors,
                 )

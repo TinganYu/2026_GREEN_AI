@@ -86,7 +86,6 @@ class HumanEvalEvaluator(BaseEvaluator):
         try:
             messages = [
                 {"role": "user", "content": self.config.prompts["instruct"].format(prompt=prompt)},
-                {"role": "assistant", "content": self.config.prompts["gen_prefix"].format(prompt=prompt)}
             ]
             return self.tokenizer.apply_chat_template(
                 messages,
@@ -97,14 +96,19 @@ class HumanEvalEvaluator(BaseEvaluator):
             return self.config.prompts["instruct"].format(prompt=prompt)
 
     def extract_answer(self, output: str) -> str:
-        """提取程式碼"""
-        # 嘗試提取 ```python 代碼塊
-        code_block_pattern = r'```(?:python)?\s*(.*?)```'
-        matches = re.findall(code_block_pattern, output, re.DOTALL)
-        if matches:
-            return matches[0].strip()
-        
+        """優先提取 python 程式碼，其次提取一般 code block"""
+        python_pattern = r'```python\s*(.*?)```'
+        python_matches = re.findall(python_pattern, output, re.DOTALL)
+        if python_matches:
+            return python_matches[0].strip()
+
+        generic_pattern = r'```\s*(.*?)```'
+        generic_matches = re.findall(generic_pattern, output, re.DOTALL)
+        if generic_matches:
+            return generic_matches[0].strip()
+
         return output.strip()
+
     
     def _build_predictions_instruct(self, resps: list[list[str]], docs: list[dict]) -> list[list[str]]:
         """
@@ -172,8 +176,6 @@ class HumanEvalEvaluator(BaseEvaluator):
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats()
             torch.cuda.synchronize()
-
-        start_time = time.time()
         
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(header)
@@ -286,6 +288,9 @@ class HumanEvalEvaluator(BaseEvaluator):
             predictions=formatted_preds,
             k=k_list,
         )
+
+        for key, val in metrics_dict.items():
+            logger.info(f"{key}: {val:.4f}")
 
         pass_at_1 = metrics_dict.get("pass@1", 0.0)
         logger.info(f"✅ 評估完成！Pass@1: {pass_at_1:.4f}")

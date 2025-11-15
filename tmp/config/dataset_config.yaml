@@ -165,9 +165,7 @@ humaneval:
   prompts:
     direct: "Complete the following Python function:\n\n{prompt}"
     
-    instruct: "Write a solution to the following problem and make sure that it passes the tests:\n```python\n{{ prompt }}\n"
-
-    gen_prefix: "Here is the completed function:\n```python\n{{ prompt }}\n "
+    instruct: "Write a solution to the following problem and make sure that it passes the tests:\n```python\n{prompt}\n```"
 
 # ============================================
 # BIG-Bench Hard - 困難推理任務
