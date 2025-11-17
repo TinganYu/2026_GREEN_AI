@@ -12,7 +12,7 @@ from tqdm import tqdm
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from agents.KVpress import KVPressAgent
-from agents.tuner import AdaptiveKVController
+# from agents.tuner import AdaptiveKVController
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -32,7 +32,8 @@ class BaseEvaluator:
         
         # Decide which agent to wrap
         if self.config.get("tuning", {}).get("adaptive", False):
-            self.agent = AdaptiveKVController(self.config, base_agent=base_agent)
+            self.agent = base_agent
+            # self.agent = AdaptiveKVController(self.config, base_agent=base_agent)
             logger.info("Using AdaptiveKVController")
         else:
             self.agent = base_agent
@@ -100,14 +101,18 @@ class BaseEvaluator:
         kv_cfg = self.config.get('kv_compression', {})
         use_compression = kv_cfg.get('enabled', True)
         
-        logger.info("STARTING EVALUATION")
+        logger.info("===================STARTING EVALUATION======================")
         logger.info(f"Model: {self.agent.model_name}, Compression: {use_compression}")
         
         # Reset peak memory
         self._reset_memory_tracking()
         
         # Load model and validate
-        self.agent.load_model()
+        if getattr(self.agent, "model", None) is None:
+            logger.info("Model not loaded yet — loading now.")
+            self.agent.load_model()
+        else:
+            logger.info("Model already loaded — reusing instance.")
         compatibility = self.agent.validate_model_compatibility()
         
         if not compatibility.get('compatible', False) and use_compression:
@@ -132,6 +137,11 @@ class BaseEvaluator:
                 if device and device.type == 'cuda':
                     current_peak = torch.cuda.max_memory_allocated(device)
                     peak_memory_during_gen = max(peak_memory_during_gen, current_peak)
+            # del r
+            # gc.collect()
+            # if torch.cuda.is_available():
+            #     torch.cuda.empty_cache()
+            #     torch.cuda.synchronize()
             
             # Clear cache periodically
             if (i+1) % self.config.get('system', {}).get('clear_cache_frequency', 100) == 0:
@@ -183,11 +193,36 @@ class BaseEvaluator:
             logger.info("Tuning disabled, running single evaluation")
             return self.run_evaluation()
         
+        # if tuning_cfg.get('adaptive', False):
+        #     logger.info("Adaptive tuning not fully implemented in base class")
+        #     return self.run_evaluation()
+        # Check if adaptive (LLM-based) tuning
         if tuning_cfg.get('adaptive', False):
-            logger.info("Adaptive tuning not fully implemented in base class")
-            return self.run_evaluation()
+            logger.info("Starting LLM-guided adaptive tuning...")
+            from agents.llm_tuner import LLMAdaptiveTuner
+            
+            tuner = LLMAdaptiveTuner(
+                evaluator=self,
+                task=self.config.get('dataset', {}),#getattr(self, 'task', 'gsm8k'),
+                max_iterations=tuning_cfg.get('max_iterations', 20),
+                accuracy_weight=tuning_cfg.get('accuracy_weight', 0.7),
+                co2_weight=tuning_cfg.get('co2_weight', 0.3),
+                enable_co2_tracking=tuning_cfg.get('enable_co2_tracking', False)  # Default False!
+            )
+            # tuner.debug_grid_style_test()
+            # return
+            results = tuner.optimize()
+            
+            # Save results
+            import json
+            from datetime import datetime
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            result_file = os.path.join(self.results_dir, f"llm_tuning_{ts}.json")
+            tuner.save_results(results, result_file)
+            
+            return results
         
-        # Grid search tuning
+        # Otherwise grid search
         ratios = tuning_cfg.get('compression_ratios_to_test', [1.0])
         methods = tuning_cfg.get('compression_methods_to_test', ['snapkv'])
         all_results = []
@@ -281,22 +316,48 @@ class BaseEvaluator:
 
     def _cleanup_after_evaluation(self):
         """Cleanup after evaluation"""
+        import gc
+        import torch
+        
+        
+            
+        # 2. 嘗試刪除 KVPress/AdaptiveKVController 實例 (魯棒處理)
+        try:
+            if hasattr(self.agent, "press") and self.agent.press is not None:
+
+                # 1. 刪除 reference
+                del self.agent.press
+                self.agent.press = None
+
+                # 2. 強制清理
+                import torch, gc
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+
+                logger.debug("KVPress/Controller instance released successfully.")
+        except Exception as e:
+            logger.warning(f"Failed to delete self.agent.press: {e}")
+        # 1. 刪除模型 (這一步通常是安全的)
         try:
             if hasattr(self.agent, "model") and self.agent.model is not None:
-                try:
-                    self.agent.model.to("cpu")
-                except Exception:
-                    pass
+                self.agent.model.to("cpu")
                 del self.agent.model
                 self.agent.model = None
         except Exception:
             pass
-        
+        # 3. 執行最激進的系統級清理
         gc.collect()
+        
         if torch.cuda.is_available():
             try:
-                torch.cuda.empty_cache()
+                # 呼叫 IPC Collect，這是 VRAM 洩漏的最後防線
                 if hasattr(torch.cuda, "ipc_collect"):
-                    torch.cuda.ipc_collect()
+                    torch.cuda.ipc_collect() 
+
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                
             except Exception as e:
                 logger.warning(f"Post-eval cleanup warning: {e}")

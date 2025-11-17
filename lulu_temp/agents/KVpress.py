@@ -59,66 +59,36 @@ class KVPressAgent(ConfigurableBaseAgent):
         # Initialize compression method
         self._setup_kvpress()
         
-        logger.info(f"KVPress compression initialized: {self.compression_method}")
-        
-    def _setup_kvpress(self):
+        # logger.info(f"KVPress compression initialized: {self.compression_method}")
+       
+    def _setup_kvpress(self, compression_method=None, compression_ratio=None,
+                   window_size=None, kernel_size=None):
         """Setup kvpress compression method based on config"""
         kv_config = self.config.get('kv_compression', {})
-        method = self.compression_method.lower()
-        
-        # Calculate compression ratio (kvpress uses ratio of tokens to keep)
-        compression_ratio = self.compression_ratio
-        
+
+        method = compression_method or self.compression_method
+        compression_ratio = compression_ratio or self.compression_ratio
+
         if method == 'observed_attention' or method == 'attention':
-            # Attention-based compression
-            self.press = ObservedAttentionPress(
-                compression_ratio=compression_ratio,
-            )
-            logger.info(f"Using ObservedAttentionPress with ratio {compression_ratio}")
-            
+            self.press = ObservedAttentionPress(compression_ratio=compression_ratio)
+
         elif method == 'snapkv':
-            # SnapKV: keeps recent + important tokens
-            window_size = kv_config.get('methods', {}).get('snapkv', {}).get('window_size', 16)
-            kernel_size = kv_config.get('methods', {}).get('snapkv', {}).get('kernel_size', 5)
-            self.press = SnapKVPress(
-                compression_ratio=compression_ratio,
-                window_size=window_size,
-                kernel_size=kernel_size
-            )
-            logger.info(f"Using SnapKVPress with ratio {compression_ratio}, window {window_size}")
-            
+            w = window_size or kv_config.get('methods', {}).get('snapkv', {}).get('window_size', 16)
+            k = kernel_size or kv_config.get('methods', {}).get('snapkv', {}).get('kernel_size', 5)
+            self.press = SnapKVPress(compression_ratio=compression_ratio, window_size=w, kernel_size=k)
+
         elif method == 'streaming_llm' or method == 'streaming':
-            # Streaming LLM: sliding window
-            window_size = kv_config.get('methods', {}).get('streaming', {}).get('window_size', 512)
-            self.press = StreamingLLMPress(
-                compression_ratio=compression_ratio,
-                window_size=window_size
-            )
-            logger.info(f"Using StreamingLLMPress with window {window_size}")
-            
+            self.press = StreamingLLMPress(compression_ratio=compression_ratio)
+
         elif method == 'knorm':
-            # Key norm based compression
-            self.press = KnormPress(
-                compression_ratio=compression_ratio,
-            )
-            logger.info(f"Using KnormPress with ratio {compression_ratio}")
-            
+            self.press = KnormPress(compression_ratio=compression_ratio)
+
         elif method == 'expected_attention':
-            # Expected attention compression
-            self.press = ExpectedAttentionPress(
-                compression_ratio=compression_ratio,
-            )
-            logger.info(f"Using ExpectedAttentionPress with ratio {compression_ratio}")
-            
+            self.press = ExpectedAttentionPress(compression_ratio=compression_ratio)
+
         else:
-            # Default to SnapKV
             logger.warning(f"Unknown method '{method}', defaulting to SnapKV")
             self.press = SnapKVPress(compression_ratio=compression_ratio)
-    # def dynamic_cache_to_tuple(dynamic_cache):
-    #     return tuple(
-    #         (layer.keys, layer.values)
-    #         for layer in dynamic_cache.layers
-    #     )
 
     def generate_with_compression(self, prompt: str, mode: str = "default", max_new_tokens: int = None, **kwargs) -> str:
         if self.model is None:
@@ -252,17 +222,6 @@ class KVPressAgent(ConfigurableBaseAgent):
                         else:
                             # couldn't infer seq_len — leave values as None / 0
                             self.compression_stats['compressed_tokens'] = None
-                    # if past_kvs is not None:
-                    #     seq_len = past_kvs[0][0].shape[2]
-                    #     self.compression_stats['compressed_tokens'] = seq_len
-                    #     self.compression_stats['total_compressions'] = len(past_kvs)
-                    #     self.compression_stats['tokens_saved'] = (
-                    #         self.compression_stats['original_tokens'] - seq_len
-                    #     )
-                    #     if self.compression_stats['original_tokens'] > 0:
-                    #         self.compression_stats['compression_ratio'] = (
-                    #             seq_len / self.compression_stats['original_tokens']
-                    #         )
                 else:
                     # Sequence too short → skip compression
                     outputs = self.model.generate(

@@ -188,9 +188,9 @@ class ConfigurableBaseAgent:
         logger.info(f"Model loaded successfully on device: {self.device}")
         
         # Log model info
-        info = self.get_model_info()
-        logger.info(f"Model parameters: {info['num_parameters']:,}")
-        logger.info(f"Vocab size: {info['vocab_size']:,}")
+        # info = self.get_model_info()
+        # logger.info(f"Model parameters: {info['num_parameters']:,}")
+        # logger.info(f"Vocab size: {info['vocab_size']:,}")
         
     def _setup_generation_config(self):
         """Setup generation configuration"""
