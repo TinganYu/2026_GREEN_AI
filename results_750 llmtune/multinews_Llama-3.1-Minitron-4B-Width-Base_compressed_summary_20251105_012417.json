@@ -1,0 +1,62 @@
+{
+  "model_info": {
+    "model_name": "nvidia/Llama-3.1-Minitron-4B-Width-Base",
+    "device": "cuda:1",
+    "num_parameters": 4512746496,
+    "trainable_parameters": 4512746496,
+    "tokenizer_vocab_size": 128000,
+    "hidden_size": 3072,
+    "num_hidden_layers": 32,
+    "num_attention_heads": 32,
+    "max_position_embeddings": 131072,
+    "vocab_size": 128256,
+    "attn_implementation": "default",
+    "gpu_memory_allocated": 8.413580417633057,
+    "gpu_memory_cached": 8.46484375,
+    "gpu_max_memory": 8.77057933807373,
+    "gpu_max_memory_cached": 8.833984375
+  },
+  "configuration": {
+    "compression_enabled": true,
+    "compression_method": "observed_attention",
+    "compression_ratio": 0.6,
+    "dataset_samples": 100
+  },
+  "results": {
+    "total_samples": 100,
+    "successful": 100,
+    "errors": 0,
+    "avg_rouge1_f": 0.22348018482553203,
+    "max_rouge1_f": 0.3707093821510297,
+    "min_rouge1_f": 0.06666666666666667,
+    "avg_rouge2_f": 0.029940329232479065,
+    "max_rouge2_f": 0.13698630136986303,
+    "min_rouge2_f": 0.0,
+    "avg_rougeL_f": 0.10824040936211621,
+    "max_rougeL_f": 0.23076923076923078,
+    "min_rougeL_f": 0.04361370716510904,
+    "total_tokens_saved": 35424,
+    "avg_compressed_total_tokens": 563.29,
+    "avg_compression_ratio": 0.3539578978061016
+  },
+  "performance": {
+    "total_time": 705.8140950000001,
+    "avg_time": 7.05814095,
+    "samples_per_minute": 8.500822018863197
+  },
+  "memory_tracking": {
+    "current_allocated_gb": 8.413580417633057,
+    "current_reserved_gb": 8.46484375,
+    "peak_allocated_gb": 8.77057933807373,
+    "peak_reserved_gb": 8.833984375,
+    "device": "cuda:1",
+    "peak_during_generation_gb": 8.77057933807373
+  },
+  "compatibility": {
+    "compatible": true,
+    "press_method": "ObservedAttentionPress",
+    "model_type": "LlamaForCausalLM",
+    "compression_test": true
+  },
+  "timestamp": "2025-11-05T01:24:17.612861"
+}
