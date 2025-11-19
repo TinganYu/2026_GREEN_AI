@@ -8,7 +8,9 @@
 import sys
 import yaml
 import argparse
+import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 # 添加上層目錄到路徑
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -158,13 +160,19 @@ class QuantizationTester:
 
 def main():
     """主程式"""
+    # 載入環境變數
+    load_dotenv()
+    
     parser = argparse.ArgumentParser(description="模型量化測試")
     parser.add_argument("--config", default="../config/model_config.yaml", help="配置文件")
     parser.add_argument("--method", choices=["gptq", "awq", "bnb"], help="量化方法")
-    parser.add_argument("--hf-token", help="HuggingFace token")
+    parser.add_argument("--hf-token", help="HuggingFace token (可從 .env 文件讀取)")
     parser.add_argument("--verify", action="store_true", help="驗證輸出")
     
     args = parser.parse_args()
+    
+    # 優先從環境變數讀取 hf_token，如果沒有再從命令行參數讀取
+    hf_token = os.getenv('HF_TOKEN') or args.hf_token
     
     try:
         print("\n量化測試開始\n")
@@ -172,7 +180,7 @@ def main():
         # 載入配置並運行測試
         config_loader = QuantizationConfigLoader(args.config)
         tester = QuantizationTester(config_loader)
-        output = tester.run_test(hf_token=args.hf_token, override_method=args.method)
+        output = tester.run_test(hf_token=hf_token, override_method=args.method)
         
         # 驗證
         if args.verify and output:

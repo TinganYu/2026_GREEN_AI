@@ -155,6 +155,8 @@ class BaseEvaluator(ABC):
             self._load_gptq_model()
         elif quantization_type == "awq":
             self._load_awq_model()
+        elif quantization_type == "bnb":
+            self._load_bnb_model()
         else:
             self._load_normal_model()
 
@@ -272,6 +274,35 @@ class BaseEvaluator(ABC):
             logger.error(f"❌ {error_msg}")
             raise RuntimeError(error_msg)
         
+        # 最終驗證
+        logger.info("🔍 驗證模型配置...")
+        logger.info(f"   Tokenizer vocab size: {len(self.tokenizer)}")
+        logger.info(f"   Model vocab size: {self.model.config.vocab_size}")
+        logger.info(f"   Pad token ID: {self.model.config.pad_token_id}")
+        logger.info(f"   EOS token ID: {self.model.config.eos_token_id}")
+        logger.info(f"   Device: {self.model.device}")
+
+    def _load_bnb_model(self):
+        """載入 BitsAndBytes (BNB) 量化模型"""
+        logger.info("🔹 載入 BitsAndBytes (BNB) 量化模型...")
+
+        try:
+            from transformers import BitsAndBytesConfig
+        except ImportError:
+            raise ImportError("請安裝 transformers 支援 BitsAndBytes: pip install transformers")
+
+        bnb_config = BitsAndBytesConfig(
+            **self.get_quantization_config()
+        )
+
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.config.model_path,
+            device_map={"": self.config.device_map},  # 強制指定裝置
+            quantization_config=bnb_config,
+            trust_remote_code=self.config.trust_remote_code,
+            token=self.config.hf_token
+        )
+
         # 最終驗證
         logger.info("🔍 驗證模型配置...")
         logger.info(f"   Tokenizer vocab size: {len(self.tokenizer)}")
