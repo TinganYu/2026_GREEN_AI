@@ -86,8 +86,8 @@ class GPTQConfig(BaseQuantConfig):
         lm_head: 是否同時量化 LM head 層 (預設 False)
         mse: 量化過程的 MSE 正則化權重 (預設 0.0)
         rotation: 權重旋轉策略 (可選 "hadamard" 或 "random"，預設 None)
-        v2: 是否啟用 GPTQ v2 流程 (預設 False)
-        v2_alpha: GPTQ v2 的 alpha 參數 (預設 0.25)
+        gptaq: 是否啟用 GPTAQ 技術 (預設 False)
+        gptaq_alpha: GPTAQ 的 alpha 參數 (預設 0.25)
         calib_num: 校準樣本數量，更多樣本 = 更高精度但更慢 (預設 256)
     
     範例:
@@ -110,8 +110,8 @@ class GPTQConfig(BaseQuantConfig):
     lm_head: bool = field(default=False)
     mse: float = field(default=0.0)
     rotation: Optional[str] = field(default=None, metadata={"choices": ["hadamard", "random"]})
-    v2: bool = field(default=False)
-    v2_alpha: float = field(default=0.25)
+    gptaq: bool = field(default=False)
+    gptaq_alpha: float = field(default=0.25)
     calib_num: int = 256
 
     @property
@@ -401,8 +401,8 @@ class Quantizer:
             lm_head=config.lm_head,
             mse=config.mse,
             rotation=config.rotation,
-            v2=config.v2,
-            v2_alpha=config.v2_alpha
+            gptaq=config.gptaq,
+            gptaq_alpha=config.gptaq_alpha,
         )
         logger.info(f"   • 配置: {quant_config}")
         
