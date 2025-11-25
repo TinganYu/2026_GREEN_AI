@@ -105,7 +105,6 @@ class BBHEvaluator(BaseEvaluator):
                 add_generation_prompt=True
             )
         except Exception as e:
-            logger.warning(f"apply_chat_template 失敗: {e}，使用純文字格式")
             prompt = ""
             for ex in self.config.fewshot_examples[task_name]:
                 prompt += self.config.prompts["fewshot"].format(input=ex['input'])

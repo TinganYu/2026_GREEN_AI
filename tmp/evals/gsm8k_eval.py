@@ -95,7 +95,6 @@ class GSM8KEvaluator(BaseEvaluator):
                 add_generation_prompt=True
             )
         except Exception as e:
-            logger.warning(f"apply_chat_template 失敗: {e}，使用純文字格式")
             return self.config.prompts["direct"].format(question=question)
     
     def _build_fewshot_prompt(self, question: str) -> str:
@@ -123,7 +122,6 @@ class GSM8KEvaluator(BaseEvaluator):
                 add_generation_prompt=True
             )
         except Exception as e:
-            logger.warning(f"apply_chat_template 失敗: {e}，使用純文字格式")
             prompt = ""
             for ex in self.config.fewshot_examples:
                 prompt += self.config.prompts["fewshot"].format(question=ex['question'])
@@ -143,7 +141,6 @@ class GSM8KEvaluator(BaseEvaluator):
                 add_generation_prompt=True
             )
         except Exception as e:
-            logger.warning(f"apply_chat_template 失敗: {e}，使用純文字格式")
             return self.config.prompts["cot"].format(question=question)
     
     def extract_answer(self, output: str, last_n_lines: int = 3) -> Optional[Number]:
