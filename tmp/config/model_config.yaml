@@ -24,8 +24,6 @@ quantization:
       lm_head: False
       mse: 0.0
       rotation: null
-      v2: False
-      v2_alpha: 0.25
       calib_num: 1024
       output_dir: null  #"quantized/gptq"
 
@@ -43,14 +41,14 @@ quantization:
       bnb_4bit_use_double_quant: true
       bnb_4bit_compute_dtype: "bfloat16"
       llm_int8_threshold: 6.0
-      llm_int8_skip_modules: []
+      llm_int8_skip_modules: ["lm_head"]
       llm_int8_has_fp16_weight: false
       llm_int8_enable_fp32_cpu_offload: false
       output_dir: null  #"quantized/bnb"
 
 dataset:
   # 選擇要評估的資料集（可以是列表）
-  selected: ["gsm8k", "truthfulqa", "commonsenseqa", "humaneval", "bbh"]  # 或 ["gsm8k", "truthfulqa", "commonsenseqa", "humaneval", "bbh"]
+  selected: ["gsm8k"]  # 或 ["gsm8k", "truthfulqa", "commonsenseqa", "humaneval", "bbh"]
   # 資料集詳細配置從 dataset_config.yaml 讀取
   config_file: "tmp/config/dataset_config.yaml"
   

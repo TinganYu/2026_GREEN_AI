@@ -20,6 +20,7 @@
 from datetime import datetime
 import gc
 import logging
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -86,8 +87,6 @@ class GPTQConfig(BaseQuantConfig):
         lm_head: 是否同時量化 LM head 層 (預設 False)
         mse: 量化過程的 MSE 正則化權重 (預設 0.0)
         rotation: 權重旋轉策略 (可選 "hadamard" 或 "random"，預設 None)
-        gptaq: 是否啟用 GPTAQ 技術 (預設 False)
-        gptaq_alpha: GPTAQ 的 alpha 參數 (預設 0.25)
         calib_num: 校準樣本數量，更多樣本 = 更高精度但更慢 (預設 256)
     
     範例:
@@ -110,8 +109,6 @@ class GPTQConfig(BaseQuantConfig):
     lm_head: bool = field(default=False)
     mse: float = field(default=0.0)
     rotation: Optional[str] = field(default=None, metadata={"choices": ["hadamard", "random"]})
-    gptaq: bool = field(default=False)
-    gptaq_alpha: float = field(default=0.25)
     calib_num: int = 256
 
     @property
@@ -337,15 +334,40 @@ class Quantizer:
         gc.collect()
         torch.cuda.empty_cache()
     
-    def _generate_output_dir(self, config: BaseQuantConfig) -> str:
-        """生成輸出目錄"""
+    def _generate_output_dir(self, config: BaseQuantConfig, trial_number: int = None, exp_dir: str = None) -> str:
+        """生成輸出目錄
+
+        Args:
+            config: 量化配置
+            trial_number: 試驗編號（用於優化實驗）
+            exp_dir: 實驗根目錄（用於優化實驗）
+
+        Returns:
+            輸出目錄路徑
+        """
         if config.output_dir:
             return config.output_dir
+
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # 確定量化方法和位元數
         if isinstance(config, AWQConfig):
-            return f"quantized/{self.model_id}-{config.method_name}-{config.w_bit}bit-{ts}"
+            method = config.method_name
+            bits = config.w_bit
         elif isinstance(config, GPTQConfig) or isinstance(config, BNBConfig):
-            return f"quantized/{self.model_id}-{config.method_name}-{config.bits}bit-{ts}"
+            method = config.method_name
+            bits = config.bits
+        else:
+            method = "unknown"
+            bits = 4
+
+        # 如果是優化實驗（提供了 trial_number 和 exp_dir）
+        if trial_number is not None and exp_dir is not None:
+            model_dir_name = f"trial{trial_number:02d}-{ts}-{method}-{bits}bit"
+            return os.path.join(exp_dir, "models", model_dir_name)
+
+        # 否則使用原有命名格式
+        return f"quantized/{self.model_id}-{method}-{bits}bit-{ts}"
 
     def _log_start(self, method: str):
         """記錄開始訊息"""
@@ -365,7 +387,7 @@ class Quantizer:
     # GPTQ 量化
     # ========================================================================
     
-    def _quantize_gptq(self, config: GPTQConfig) -> str:
+    def _quantize_gptq(self, config: GPTQConfig, trial_number: int = None, exp_dir: str = None) -> str:
         """執行 GPTQ 量化"""
         try:
             from gptqmodel import GPTQModel, QuantizeConfig
@@ -375,9 +397,9 @@ class Quantizer:
                 "❌ 請先安裝 GPTQ 依賴:\n"
                 "   pip install gptqmodel datasets"
             )
-        
+
         self._log_start("GPTQ")
-        output_dir = self._generate_output_dir(config)
+        output_dir = self._generate_output_dir(config, trial_number, exp_dir)
         
         # 載入 tokenizer
         logger.info("🔹 載入 tokenizer...")
@@ -401,8 +423,6 @@ class Quantizer:
             lm_head=config.lm_head,
             mse=config.mse,
             rotation=config.rotation,
-            gptaq=config.gptaq,
-            gptaq_alpha=config.gptaq_alpha,
         )
         logger.info(f"   • 配置: {quant_config}")
         
@@ -424,7 +444,19 @@ class Quantizer:
 
         # 執行量化
         logger.info("🔹 開始量化（這可能需要較長時間）...")
+        # 同步 GPU，準備正式計時
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+
         model.quantize(calibration_dataset, batch_size=1)
+
+        # 統計 GPU 記憶體與 throughput
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            peak_memory = torch.cuda.max_memory_allocated() / (1024 ** 2)
+            logger.info(f"   • 量化過程中 GPU 峰值記憶體使用: {peak_memory:.2f} MB")
+            
         logger.info("   ✓ 量化完成")
         
         # 儲存
@@ -440,7 +472,7 @@ class Quantizer:
     # AWQ 量化
     # ========================================================================
     
-    def _quantize_awq(self, config: AWQConfig) -> str:
+    def _quantize_awq(self, config: AWQConfig, trial_number: int = None, exp_dir: str = None) -> str:
         """執行 AWQ 量化"""
         try:
             from awq import AutoAWQForCausalLM
@@ -449,9 +481,9 @@ class Quantizer:
                 "❌ 請先安裝 AWQ 依賴:\n"
                 "   pip install autoawq"
             )
-        
+
         self._log_start("AWQ")
-        output_dir = self._generate_output_dir(config)
+        output_dir = self._generate_output_dir(config, trial_number, exp_dir)
         
         # 載入 tokenizer
         logger.info("🔹 載入 tokenizer...")
@@ -509,7 +541,7 @@ class Quantizer:
     # BNB 量化
     # ========================================================================
     
-    def _quantize_bnb(self, config: BNBConfig) -> str:
+    def _quantize_bnb(self, config: BNBConfig, trial_number: int = None, exp_dir: str = None) -> str:
         """執行 BitsAndBytes 量化"""
         try:
             from transformers import AutoModelForCausalLM, BitsAndBytesConfig
@@ -518,9 +550,9 @@ class Quantizer:
                 "❌ 請先安裝 BNB 依賴:\n"
                 "   pip install transformers bitsandbytes"
             )
-        
+
         self._log_start("BitsAndBytes")
-        output_dir = self._generate_output_dir(config)
+        output_dir = self._generate_output_dir(config, trial_number, exp_dir)
         
         # 載入 tokenizer
         logger.info("🔹 載入 tokenizer...")
@@ -567,20 +599,23 @@ class Quantizer:
     # 公開接口
     # ========================================================================
     
-    def quantize(self, config: Union[GPTQConfig, AWQConfig, BNBConfig]) -> str:
+    def quantize(self, config: Union[GPTQConfig, AWQConfig, BNBConfig],
+                 trial_number: int = None, exp_dir: str = None) -> str:
         """
         使用指定配置執行量化
-        
+
         Args:
             config: 量化配置物件（GPTQConfig, AWQConfig, 或 BNBConfig）
-        
+            trial_number: 試驗編號（用於優化實驗）
+            exp_dir: 實驗根目錄（用於優化實驗）
+
         Returns:
             str: 量化後模型的輸出路徑
-        
+
         Raises:
             ValueError: 如果配置驗證失敗
             ImportError: 如果缺少必要的依賴
-        
+
         Examples:
             >>> quantizer = Quantizer("meta-llama/Llama-3.2-1B-Instruct")
             >>> config = AWQConfig(w_bit=4, q_group_size=128)
@@ -588,14 +623,14 @@ class Quantizer:
         """
         # 驗證配置
         config.validate()
-        
+
         # 根據配置類型執行對應的量化
         if isinstance(config, GPTQConfig):
-            return self._quantize_gptq(config)
+            return self._quantize_gptq(config, trial_number, exp_dir)
         elif isinstance(config, AWQConfig):
-            return self._quantize_awq(config)
+            return self._quantize_awq(config, trial_number, exp_dir)
         elif isinstance(config, BNBConfig):
-            return self._quantize_bnb(config)
+            return self._quantize_bnb(config, trial_number, exp_dir)
         else:
             raise ValueError(f"不支援的配置類型: {type(config)}")
     
