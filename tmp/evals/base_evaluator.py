@@ -148,7 +148,13 @@ class BaseEvaluator(ABC):
             token=self.config.hf_token
         )
         if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+            # 避免將 pad_token 設為 eos_token（會導致 Gemma 等模型提早停止）
+            if self.tokenizer.unk_token is not None:
+                self.tokenizer.pad_token = self.tokenizer.unk_token
+                logger.info("⚙️  設定 pad_token = unk_token")
+            else:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+                logger.warning("⚠️  pad_token 設為 eos_token（可能導致某些模型提早停止生成）")
 
         # 根據量化類型載入模型
         if quantization_type == "gptq":

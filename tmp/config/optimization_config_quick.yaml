@@ -57,19 +57,19 @@ multiobjective:
   objectives:
     - name: "accuracy_change"
       direction: "maximize"        # 最大化準確率變化（期望正值=上升）
-      weight: 2.0
+      weight: 2.0                  # 統一權重：用於推薦配置 + 計算違反分數
       reference_point: -0.15       # 參考點：下降 15%（最壞情況）
       description: "準確率變化量（正=上升，負=下降）"
 
     - name: "gpu_peak_change"
       direction: "minimize"        # 最小化 GPU 峰值變化（期望負值=減少）
-      weight: 1.0
+      weight: 1.0                  # GPU 內存的相對重要性
       reference_point: 0.10        # 參考點：增加 10%（最壞情況）
       description: "GPU 峰值內存變化量（負=減少，正=增加）"
 
     - name: "latency_change"
       direction: "minimize"        # 最小化延遲變化（期望負值=減少）
-      weight: 1.0
+      weight: 1.0                  # 推理延遲的相對重要性
       reference_point: 0.50        # 參考點：增加 50%（最壞情況）
       description: "推理延遲變化量（負=減少，正=增加）"
 
@@ -153,16 +153,9 @@ output:
   visualization:
     enabled: false
     plot_types:
-      # 現有圖表
       - "3d_pareto"                # 3D Pareto 前沿
       - "parallel_coordinates"     # 平行座標圖
       - "trade_off_matrix"         # 權衡矩陣
-
-      # 新增：優化過程圖表
-      - "optimization_history"     # 優化歷史（目標值隨試驗變化）
-      - "param_importances"        # 超參數重要性分析
-      - "trial_timeline"           # 試驗時間線與狀態分佈
-      - "hypervolume_history"      # 超體積收斂曲線
     output_format: "html"          # html / png / pdf
 
 # --------------------------------------------

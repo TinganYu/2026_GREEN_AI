@@ -17,6 +17,7 @@ from .result_tracker import ResultTracker
 from .visualization import ParetoVisualizer
 from .optimizers.optuna_mo_optimizer import OptunaMultiObjectiveOptimizer
 from .optimizers.random_optimizer import RandomOptimizer
+from .optimizers.llm_multiagent_optimizer import LLMMultiAgentOptimizer
 
 logger = logging.getLogger("OptimizationOrchestrator")
 logger.setLevel(logging.INFO)
@@ -117,8 +118,7 @@ class OptimizationOrchestrator:
         plot_files = self.visualizer.create_visualizations(
             optimization_results['pareto_frontier'],
             optimization_results['satisfying_solutions'],
-            self.output_dir,
-            study=optimization_results.get('study')  # 傳遞 Study 物件（可選）
+            self.output_dir
         )
 
         # 最終總結
@@ -176,6 +176,15 @@ class OptimizationOrchestrator:
 
         elif optimizer_type == 'random':
             optimizer = RandomOptimizer(
+                config=self.config,
+                baseline_metrics=baseline_results,
+                evaluator_agent=self.evaluator_agent,
+                datasets=datasets,
+                exp_dir=self.output_dir  # 傳遞實驗目錄
+            )
+
+        elif optimizer_type == 'llm_multiagent':
+            optimizer = LLMMultiAgentOptimizer(
                 config=self.config,
                 baseline_metrics=baseline_results,
                 evaluator_agent=self.evaluator_agent,

@@ -62,7 +62,6 @@ class BaseOptimizer(ABC):
                 'pareto_frontier': List[Dict],
                 'satisfying_solutions': List[Dict],
                 'recommended_config': Dict,
-                'hypervolume': float,
                 'n_total_trials': int,
                 'n_pareto_solutions': int,
                 'n_satisfying_solutions': int
@@ -162,7 +161,7 @@ class BaseOptimizer(ABC):
         """
         計算目標違反程度（0 = 完美滿足，值越高 = 違反越嚴重）
 
-        使用配置中的違反權重。
+        使用 multiobjective.objectives 中配置的權重，確保與推薦邏輯一致。
 
         Args:
             objectives: 元組 (accuracy_change, gpu_peak_change, latency_change)
@@ -172,12 +171,9 @@ class BaseOptimizer(ABC):
         """
         accuracy_change, gpu_peak_change, latency_change = objectives
 
-        # 獲取違反權重
-        weights = self.config.get('fallback', {}).get('violation_weights', {
-            'accuracy': 2.0,
-            'gpu_peak': 1.0,
-            'latency': 1.0
-        })
+        # 使用目標配置中的權重（與推薦邏輯保持一致）
+        weights = [obj['weight'] for obj in self.objectives_config]
+        # weights[0] = accuracy, weights[1] = gpu_peak, weights[2] = latency
 
         # 計算每個目標的違反程度（正值 = 違反，0 = 滿足）
         # 準確率：期望 >= accuracy_min，違反時為負數差距
@@ -191,9 +187,9 @@ class BaseOptimizer(ABC):
 
         # 加權總和
         violation_score = (
-            weights['accuracy'] * acc_violation +
-            weights['gpu_peak'] * gpu_violation +
-            weights['latency'] * latency_violation
+            weights[0] * acc_violation +
+            weights[1] * gpu_violation +
+            weights[2] * latency_violation
         )
 
         return violation_score

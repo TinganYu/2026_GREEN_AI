@@ -75,7 +75,6 @@ class RandomOptimizer(BaseOptimizer):
             'pareto_frontier': pareto_frontier,
             'satisfying_solutions': satisfying_solutions,
             'recommended_config': recommended,
-            'hypervolume': 0.0,
             'n_total_trials': len(all_trials),
             'n_pareto_solutions': len(pareto_frontier),
             'n_satisfying_solutions': len(satisfying_solutions)

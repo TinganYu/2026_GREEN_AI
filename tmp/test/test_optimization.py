@@ -16,6 +16,10 @@ import os
 import argparse
 import logging
 
+# 載入 .env 環境變量
+from dotenv import load_dotenv
+load_dotenv()
+
 # 將專案根目錄加入模組搜尋路徑
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -150,16 +154,6 @@ def print_summary(results: dict):
             print(f"    - {plot_type}: {os.path.basename(path)}")
 
     print("="*70)
-
-    # 下一步
-    print("\nNext Steps:")
-    print(f"  1. View results: cat {results['output_dir']}/summary.json")
-    print(f"  2. View visualizations: open {results['output_dir']}/pareto_3d.html")
-    if results['recommended_config']:
-        print(f"  3. Use recommended config for quantization:")
-        print(f"     Method: {results['recommended_config']['config']['method']}")
-
-    print()
 
 
 if __name__ == "__main__":

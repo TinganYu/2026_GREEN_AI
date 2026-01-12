@@ -143,15 +143,23 @@ class HumanEvalEvaluator(BaseEvaluator):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_file = os.path.join(self.config.output_dir, f"{ts}.txt")
 
+        # 準備 generation 參數
         generation_kwargs = {
             "max_new_tokens": self.config.max_new_tokens,
             "do_sample": self.config.do_sample,
             "temperature": self.config.temperature if self.config.do_sample else None,
             "top_p": self.config.top_p if self.config.do_sample else None,
-            "pad_token_id": self.tokenizer.pad_token_id,
             "use_cache": True,
             "return_full_text": False,
         }
+
+        # 只有當 pad_token_id != eos_token_id 時才傳遞（避免提早停止）
+        if self.tokenizer.pad_token_id != self.tokenizer.eos_token_id:
+            generation_kwargs["pad_token_id"] = self.tokenizer.pad_token_id
+
+        # 明確設定 eos_token_id
+        if hasattr(self.tokenizer, "eos_token_id") and self.tokenizer.eos_token_id is not None:
+            generation_kwargs["eos_token_id"] = self.tokenizer.eos_token_id
 
         model_info_lines = [
             "=" * 80,

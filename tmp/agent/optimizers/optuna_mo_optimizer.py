@@ -115,20 +115,12 @@ class OptunaMultiObjectiveOptimizer(BaseOptimizer):
         else:
             logger.warning("\n未找到有效配置 - 所有試驗均失敗")
 
-        # Calculate hypervolume (if available)
-        try:
-            hypervolume = self._calculate_hypervolume(study)
-        except:
-            hypervolume = 0.0
-
         results = {
             'optimizer_type': 'optuna_multiobjective',
-            'study': study,
             'all_trials': all_trials,  # 所有試驗（完成/剪枝/失敗）
             'pareto_frontier': pareto_frontier,
             'satisfying_solutions': satisfying_solutions,
             'recommended_config': recommended,
-            'hypervolume': hypervolume,
             'n_total_trials': len(all_trials),  # 總數（包含所有狀態）
             'n_pareto_solutions': len(pareto_frontier),
             'n_satisfying_solutions': len(satisfying_solutions)
@@ -165,6 +157,7 @@ class OptunaMultiObjectiveOptimizer(BaseOptimizer):
             trial.set_user_attr('config', quant_config)
             trial.set_user_attr('error', str(e))
             trial.set_user_attr('status', 'failed')
+            trial.set_user_attr('satisfies_constraints', False)  # 無法評估約束，標記為不滿足
             # 返回最差值以標記為失敗
             return float('inf'), float('inf'), float('inf')
 
@@ -174,6 +167,7 @@ class OptunaMultiObjectiveOptimizer(BaseOptimizer):
             trial.set_user_attr('config', quant_config)
             trial.set_user_attr('error', trial_result.get('error', '未知'))
             trial.set_user_attr('status', 'failed')
+            trial.set_user_attr('satisfies_constraints', False)  # 無法評估約束，標記為不滿足
             return float('inf'), float('inf'), float('inf')
 
         # 獲取目標值
@@ -191,10 +185,10 @@ class OptunaMultiObjectiveOptimizer(BaseOptimizer):
         # 檢查約束（硬剪枝）
         if not trial_result['satisfies_constraints']:
             logger.warning("✗ 違反約束 - 試驗被剪枝")
-            # 記錄剪枝原因和配置
+            # 記錄配置
             trial.set_user_attr('config', quant_config)
             trial.set_user_attr('status', 'pruned')
-            trial.set_user_attr('pruned_reason', 'constraint_violation')
+            trial.set_user_attr('satisfies_constraints', False)
             trial.set_user_attr('objectives', obj)
             if 'results' in trial_result and 'quantized_model_path' in trial_result['results']:
                 trial.set_user_attr('quantized_model_path', trial_result['results']['quantized_model_path'])
@@ -207,6 +201,7 @@ class OptunaMultiObjectiveOptimizer(BaseOptimizer):
         trial.set_user_attr('violation_score', trial_result['violation_score'])
         trial.set_user_attr('status', 'completed')
         trial.set_user_attr('objectives', obj)
+        trial.set_user_attr('satisfies_constraints', trial_result['satisfies_constraints'])
 
         # 記錄模型路徑（如果可用）
         if 'results' in trial_result and 'quantized_model_path' in trial_result['results']:
@@ -357,17 +352,13 @@ class OptunaMultiObjectiveOptimizer(BaseOptimizer):
             }
 
         # 約束和目標滿足情況
-        trial_dict['satisfies_constraints'] = user_attrs.get('satisfies_constraints', False)
+        trial_dict['satisfies_constraints'] = user_attrs.get('satisfies_constraints', True)
         trial_dict['satisfies_targets'] = user_attrs.get('satisfies_targets', False)
         trial_dict['violation_score'] = user_attrs.get('violation_score', float('inf'))
 
         # 錯誤信息（如果失敗）
         if 'error' in user_attrs:
             trial_dict['error'] = user_attrs['error']
-
-        # 剪枝原因（如果被剪枝）
-        if 'pruned_reason' in user_attrs:
-            trial_dict['pruned_reason'] = user_attrs['pruned_reason']
 
         # 模型路徑
         if 'quantized_model_path' in user_attrs:
@@ -385,21 +376,3 @@ class OptunaMultiObjectiveOptimizer(BaseOptimizer):
 
         return trial_dict
 
-    def _calculate_hypervolume(self, study: optuna.Study) -> float:
-        """
-        計算超體積指標
-
-        注意：需要安裝支援超體積計算的 optuna
-        """
-        try:
-            # 從配置中獲取參考點
-            ref_points = [obj['reference_point'] for obj in self.objectives_config]
-
-            # 計算超體積
-            # 這是一個佔位符 - 實際實現會使用 optuna 的內建方法
-            # 或外部函式庫如 pygmo
-            return 0.0
-
-        except Exception as e:
-            logger.warning(f"計算超體積失敗：{e}")
-            return 0.0

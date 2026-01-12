@@ -1,0 +1,181 @@
+# ============================================
+# LLM Multi-Agent 量化優化配置 (Phase 1 MVP)
+# ============================================
+
+experiment:
+  name: "llm-multiagent-mvp"
+  output_dir: "results/llm_optimization"
+
+# --------------------------------------------
+# 1. 基線配置
+# --------------------------------------------
+baseline:
+  model_name: "meta-llama/Llama-3.2-1B-Instruct"
+  model_dtype: "float16"
+  device_map: "cuda:0"
+  trust_remote_code: true
+
+  # 資料集評估配置
+  datasets:
+    gsm8k:
+      enabled: true
+      num_samples: 20        # Phase 1: 小規模測試
+    truthfulqa:
+      enabled: true
+      num_samples: 20
+
+# --------------------------------------------
+# 2. 量化評估配置
+# --------------------------------------------
+quantization_eval:
+  use_same_datasets_as_baseline: true
+
+# ====================================================================
+# 3. 多目標優化配置
+# ====================================================================
+multiobjective:
+  objectives:
+    - name: "accuracy_change"
+      direction: "maximize"
+      weight: 2.0                  # 統一權重：用於推薦配置 + 計算違反分數
+      reference_point: -0.15
+
+    - name: "gpu_peak_change"
+      direction: "minimize"
+      weight: 1.0                  # GPU 內存的相對重要性
+      reference_point: 0.10
+
+    - name: "latency_change"
+      direction: "minimize"
+      weight: 1.0                  # 推理延遲的相對重要性
+      reference_point: 0.50
+
+  # 聚合方法
+  aggregation:
+    method: "weighted"
+    dataset_weights:
+      gsm8k: 0.50
+      truthfulqa: 0.50
+
+  # 硬約束（Phase 1不使用）
+  constraints:
+    enabled: false
+
+  # 用戶目標（用於推薦）
+  targets:
+    accuracy_min: -0.20
+    gpu_peak_max: -0.40
+    latency_max: 1.0
+
+# --------------------------------------------
+# 4. LLM Multi-Agent 優化器配置 ⭐
+# --------------------------------------------
+optimizer:
+  type: "llm_multiagent"  # 使用LLM multi-agent optimizer
+
+  # === LLM配置 ===
+  llm_agent:
+    # LLM Provider
+    provider: "openai"  # or "anthropic"
+    model: "gpt-4o"
+    api_key_env: "OPENAI_API_KEY"
+
+    # 生成參數
+    temperature: 0.7
+    max_tokens: 2048
+
+    # Agent特定溫度
+    agent_temperatures:
+      analyzer: 0.3    # 低溫保證一致性
+      planner: 0.7     # 中高溫增加創造力
+      monitor: 0.4     # 低中溫保證穩定評估
+
+    # Trial限制
+    max_trials: 5     # Phase 1: 小規模測試
+    min_trials: 3      # 最少試驗數
+
+  # === 停止條件（簡化） ===
+  stopping:
+    budget:
+      max_trials: 5
+      max_time_hours: 5
+
+    convergence:
+      enabled: true
+      window: 3              # 連續3輪無改善
+      threshold: 0.05        # 收斂閾值（當前版本未使用，基於Pareto大小變化判斷）
+
+  # === 簡單的規則驗證（替代ExpertAgent） ===
+  validation:
+    rules:
+      - "gptq.act_group_aware=True requires desc_act=False"
+      - "bits=2 not recommended for models <1B"
+    check_gpu_memory: true
+    max_expected_gpu_gb: 16
+
+  # === Fallback機制 ===
+  fallback:
+    on_llm_failure: "stop"  # LLM失敗時的行為: "random" (降級到隨機) 或 "stop" (直接停止優化)
+    max_llm_failures: 3       # 超過N次失敗後觸發fallback策略
+
+  # === 對話日誌 ===
+  logging:
+    save_conversations: true
+    conversation_file: "agent_conversations.jsonl"
+    save_prompts: true  # 調試用
+
+  # === 搜索空間（簡化版）===
+  search_space:
+    methods: ["gptq", "awq"]  # Phase 1: 只測試2個方法
+
+    gptq:
+      bits: [4, 8]
+      group_size: [32, 64, 128]
+      calib_num: [256]
+      desc_act: [true, false]
+      sym: [true]
+      damp_percent: [0.01]
+      damp_auto_increment: [0.01]
+      act_group_aware: [false]
+      static_groups: [false]
+      true_sequential: [true]
+      lm_head: [false]
+      mse: [0.0]
+      rotation: [null]
+
+    awq:
+      w_bit: [4]
+      q_group_size: [64, 128]
+      zero_point: [true, false]
+      version: ["gemm"]
+      modules_to_not_convert: [["lm_head"], []]
+
+# --------------------------------------------
+# 5. 輸出和視覺化
+# --------------------------------------------
+output:
+  save_all_trials: true
+  save_pareto_frontier: true
+
+  recommendation:
+    strategy: "closest_to_target"
+
+  visualization:
+    enabled: false
+    plot_types:
+      - "3d_pareto"
+      - "parallel_coordinates"
+      - "trade_off_matrix"
+    output_format: "html"
+
+# --------------------------------------------
+# 6. 日誌記錄和快取
+# --------------------------------------------
+logging:
+  level: "INFO"
+  save_logs: true
+  log_file: "optimization.log"
+
+cache:
+  enable_baseline_cache: true
+  cache_dir: ".cache/optimization"

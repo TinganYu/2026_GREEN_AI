@@ -75,7 +75,7 @@ class ConfigLoader:
 
         # 驗證優化器類型
         optimizer_type = config['optimizer']['type']
-        valid_types = ['optuna_multiobjective', 'qehvi', 'random']
+        valid_types = ['optuna_multiobjective', 'qehvi', 'random', 'llm_multiagent']
         if optimizer_type not in valid_types:
             raise ValueError(f"無效的優化器類型：{optimizer_type}。"
                            f"必須是以下之一：{valid_types}")

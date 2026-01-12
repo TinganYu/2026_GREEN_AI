@@ -58,7 +58,7 @@ class ResultTracker:
         # 統計試驗狀態
         all_trials = optimization_results['all_trials']
         failed_trials = [t for t in all_trials if t.get('status') == 'failed' or 'error' in t]
-        pruned_trials = [t for t in all_trials if t.get('status') == 'pruned' or 'pruned_reason' in t]
+        pruned_trials = [t for t in all_trials if t.get('status') == 'pruned']
         completed_trials = [t for t in all_trials if t.get('status') == 'completed']
 
         n_failed = len(failed_trials)
@@ -91,7 +91,6 @@ class ResultTracker:
                 'n_failed_trials': n_failed,
                 'n_pareto_solutions': optimization_results['n_pareto_solutions'],
                 'n_satisfying_solutions': optimization_results['n_satisfying_solutions'],
-                'hypervolume': optimization_results['hypervolume'],
                 'success_rate': f"{n_completed / n_total * 100:.1f}%" if n_total > 0 else "0%"
             },
 
@@ -185,17 +184,6 @@ class ResultTracker:
 
         logger.info(f"Pareto 前沿已保存至：{pareto_file}")
 
-        # 保存 Optuna Study 物件（如果提供）
-        if 'study' in optimization_results and optimization_results['study'] is not None:
-            import pickle
-            study_pkl = os.path.join(self.output_dir, 'study.pkl')
-            try:
-                with open(study_pkl, 'wb') as f:
-                    pickle.dump(optimization_results['study'], f)
-                logger.info(f"Optuna Study 已保存至：{study_pkl}")
-            except Exception as e:
-                logger.warning(f"保存 Optuna Study 失敗：{e}")
-
         return results_file
 
     def _serialize_trials(self, trials: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -251,10 +239,6 @@ class ResultTracker:
         # 添加錯誤信息（如果失敗）
         if 'error' in trial:
             serialized['error'] = trial['error']
-
-        # 添加剪枝原因（如果被剪枝）
-        if 'pruned_reason' in trial:
-            serialized['pruned_reason'] = trial['pruned_reason']
 
         # 添加模型路徑
         if 'quantized_model_path' in trial:
