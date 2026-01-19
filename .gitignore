@@ -8,6 +8,7 @@ quantized/
 old_results/
 results/llm_optimization
 results/optimization
+results/*.txt
 test.ipynb
 test.py
 Llama*

@@ -3,14 +3,14 @@
 # ============================================
 
 experiment:
-  name: "llm-multiagent-mvp"
+  name: "gemma-2-2b-it"    #llm-multiagent-mvp
   output_dir: "results/llm_optimization"
 
 # --------------------------------------------
 # 1. 基線配置
 # --------------------------------------------
 baseline:
-  model_name: "meta-llama/Llama-3.2-1B-Instruct"
+  model_name: "google/gemma-2-2b-it"
   model_dtype: "float16"
   device_map: "cuda:0"
   trust_remote_code: true
@@ -19,10 +19,10 @@ baseline:
   datasets:
     gsm8k:
       enabled: true
-      num_samples: 20        # Phase 1: 小規模測試
+      num_samples: 50
     truthfulqa:
       enabled: true
-      num_samples: 20
+      num_samples: 50
 
 # --------------------------------------------
 # 2. 量化評估配置
@@ -38,17 +38,17 @@ multiobjective:
     - name: "accuracy_change"
       direction: "maximize"
       weight: 2.0                  # 統一權重：用於推薦配置 + 計算違反分數
-      reference_point: -0.15
+      # reference_point: -0.15
 
     - name: "gpu_peak_change"
       direction: "minimize"
       weight: 1.0                  # GPU 內存的相對重要性
-      reference_point: 0.10
+      # reference_point: 0.10
 
     - name: "latency_change"
       direction: "minimize"
       weight: 1.0                  # 推理延遲的相對重要性
-      reference_point: 0.50
+      # reference_point: 0.50
 
   # 聚合方法
   aggregation:
@@ -63,8 +63,8 @@ multiobjective:
 
   # 用戶目標（用於推薦）
   targets:
-    accuracy_min: -0.20
-    gpu_peak_max: -0.40
+    accuracy_min: -0.10
+    gpu_peak_max: -0.50
     latency_max: 1.0
 
 # --------------------------------------------
@@ -91,17 +91,17 @@ optimizer:
       monitor: 0.4     # 低中溫保證穩定評估
 
     # Trial限制
-    max_trials: 5     # Phase 1: 小規模測試
-    min_trials: 3      # 最少試驗數
+    max_trials: 15     # Phase 1: 小規模測試
+    min_trials: 10      # 最少試驗數
 
   # === 停止條件（簡化） ===
   stopping:
     budget:
       max_trials: 5
-      max_time_hours: 5
+      max_time_hours: 24
 
     convergence:
-      enabled: true
+      enabled: false
       window: 3              # 連續3輪無改善
       threshold: 0.05        # 收斂閾值（當前版本未使用，基於Pareto大小變化判斷）
 
@@ -109,7 +109,7 @@ optimizer:
   validation:
     rules:
       - "gptq.act_group_aware=True requires desc_act=False"
-      - "bits=2 not recommended for models <1B"
+      # - "bits=2 not recommended for models <1B"
     check_gpu_memory: true
     max_expected_gpu_gb: 16
 
@@ -126,29 +126,39 @@ optimizer:
 
   # === 搜索空間（簡化版）===
   search_space:
-    methods: ["gptq", "awq"]  # Phase 1: 只測試2個方法
+    methods: ["gptq", "awq", "bnb"]
 
     gptq:
-      bits: [4, 8]
-      group_size: [32, 64, 128]
+      bits: [2, 3, 4, 8]
+      group_size: [-1, 16, 32, 64, 128]
       calib_num: [256]
       desc_act: [true, false]
-      sym: [true]
-      damp_percent: [0.01]
-      damp_auto_increment: [0.01]
-      act_group_aware: [false]
-      static_groups: [false]
-      true_sequential: [true]
+      sym: [true, false]
+      damp_percent: [0.001, 0.005, 0.01, 0.03, 0.05]
+      damp_auto_increment: [0.001, 0.005, 0.01, 0.03, 0.05]
+      act_group_aware: [true, false]  # `act_group_aware` == `True` requires `desc_act` == `False`
+      static_groups: [true, false]
+      true_sequential: [true, false]
       lm_head: [false]
-      mse: [0.0]
+      mse: [0.0, 0.1, 0.2]
       rotation: [null]
 
     awq:
       w_bit: [4]
-      q_group_size: [64, 128]
+      q_group_size: [16, 32, 64, 128]
       zero_point: [true, false]
       version: ["gemm"]
       modules_to_not_convert: [["lm_head"], []]
+
+    bnb:
+      bits: [4, 8]
+      bnb_4bit_quant_type: ["nf4", "fp4"]
+      bnb_4bit_use_double_quant: [true, false]
+      bnb_4bit_compute_dtype: ["float16", "bfloat16"]
+      llm_int8_threshold: [4.0, 4.5, 5.0, 6.0]
+      llm_int8_skip_modules: [["lm_head"]]
+      llm_int8_has_fp16_weight: [false]
+      llm_int8_enable_fp32_cpu_offload: [false]
 
 # --------------------------------------------
 # 5. 輸出和視覺化

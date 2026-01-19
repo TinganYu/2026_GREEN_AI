@@ -258,10 +258,14 @@ class BaseOptimizer(ABC):
             trials: 試驗字典列表
 
         Returns:
-            Pareto 最優試驗列表
+            Pareto 最優試驗列表（每個試驗包含 trial_id）
         """
-        # 過濾成功的試驗
-        valid_trials = [t for t in trials if t.get('success', False)]
+        # 過濾成功的試驗，並記錄原始索引作為 trial_id
+        valid_trials = []
+        for i, t in enumerate(trials):
+            if t.get('success', False):
+                t['trial_id'] = i
+                valid_trials.append(t)
 
         if not valid_trials:
             return []

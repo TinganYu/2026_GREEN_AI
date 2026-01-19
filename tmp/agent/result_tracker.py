@@ -11,6 +11,8 @@ from typing import Dict, List, Any
 from datetime import datetime
 from pathlib import Path
 
+from .scoring import LayeredScorer, ParetoAnalyzer
+
 logger = logging.getLogger("ResultTracker")
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
@@ -174,7 +176,8 @@ class ResultTracker:
                 {
                     'config': t['config'],
                     'objectives': t['objectives'],
-                    'satisfies_targets': t['satisfies_targets']
+                    'satisfies_targets': t['satisfies_targets'],
+                    'violation_score': t.get('violation_score', 0.0)
                 }
                 for t in optimization_results['pareto_frontier']
             ]
@@ -183,6 +186,49 @@ class ResultTracker:
             json.dump(pareto_data, f, indent=2)
 
         logger.info(f"Pareto 前沿已保存至：{pareto_file}")
+
+        # 方案 3：為滿足 target 的配置評分
+        if optimization_results['satisfying_solutions']:
+            try:
+                logger.info("正在為滿足目標的配置評分...")
+                scorer = LayeredScorer(self.config)
+                satisfying_scored = scorer.score_satisfying_trials(
+                    optimization_results['satisfying_solutions'],
+                    optimization_results['pareto_frontier']
+                )
+
+                scored_file = os.path.join(self.output_dir, 'satisfying_trials_scored.json')
+                with open(scored_file, 'w', encoding='utf-8') as f:
+                    json.dump(satisfying_scored, f, indent=2, ensure_ascii=False)
+
+                logger.info(f"滿足目標的配置評分已儲存至：{scored_file}")
+            except Exception as e:
+                logger.error(f"評分失敗：{e}")
+                satisfying_scored = None
+        else:
+            logger.warning("沒有滿足目標的試驗，跳過評分")
+            satisfying_scored = None
+
+        # 方案 4：Pareto 前沿深度分析
+        if optimization_results['pareto_frontier']:
+            try:
+                logger.info("正在進行 Pareto 前沿深度分析...")
+                analyzer = ParetoAnalyzer(self.config)
+                pareto_analysis = analyzer.analyze_pareto_frontier(
+                    optimization_results['pareto_frontier'],
+                    optimization_results['satisfying_solutions'],
+                    satisfying_scored
+                )
+
+                analysis_file = os.path.join(self.output_dir, 'pareto_deep_analysis.json')
+                with open(analysis_file, 'w', encoding='utf-8') as f:
+                    json.dump(pareto_analysis, f, indent=2, ensure_ascii=False)
+
+                logger.info(f"Pareto 前沿深度分析已儲存至：{analysis_file}")
+            except Exception as e:
+                logger.error(f"Pareto 分析失敗：{e}")
+        else:
+            logger.warning("Pareto 前沿為空，跳過深度分析")
 
         return results_file
 
