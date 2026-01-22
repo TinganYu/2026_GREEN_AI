@@ -85,7 +85,8 @@ def load_experiment_data(exp_type: str, exp_name: str) -> Dict[str, Any]:
         "config.json",
         "satisfying_trials_scored.json",
         "failed_trials.json",
-        "pruned_trials.json"
+        "pruned_trials.json",
+        "prompt_config_used.json"
     ]
 
     for filename in json_files:
@@ -243,6 +244,36 @@ def calculate_violation_score(obj: Dict, targets: Dict) -> float:
 # 視覺化函數
 # ==========================================
 
+def get_trial_status(trial: Dict) -> str:
+    """
+    獲取試驗狀態，兼容新舊數據格式
+    新格式：有 status 欄位
+    舊格式：用 success 欄位推斷
+    """
+    if "status" in trial:
+        return trial["status"]
+    # 舊格式兼容
+    if trial.get("success", False):
+        return "completed"
+    elif "error" in trial:
+        return "failed"
+    return "unknown"
+
+
+def is_trial_completed(trial: Dict) -> bool:
+    """檢查試驗是否完成（成功），兼容新舊格式"""
+    status = get_trial_status(trial)
+    if status == "completed":
+        return True
+    # 舊格式：沒有 status 但有有效的 objectives
+    if status == "unknown" and trial.get("objectives", {}).get("accuracy_change") is not None:
+        obj = trial.get("objectives", {})
+        # 確保 objectives 不是 inf（失敗時的預設值）
+        if obj.get("accuracy_change") != float('inf'):
+            return True
+    return False
+
+
 def create_3d_pareto_plot(pareto_data: Dict, all_trials: Dict, targets: Dict) -> go.Figure:
     """建立 3D Pareto 前沿圖"""
     fig = go.Figure()
@@ -250,9 +281,9 @@ def create_3d_pareto_plot(pareto_data: Dict, all_trials: Dict, targets: Dict) ->
     # 獲取 Pareto 解
     pareto_solutions = get_pareto_solutions(pareto_data)
 
-    # 獲取所有完成的試驗
+    # 獲取所有完成的試驗（兼容新舊格式）
     all_completed = [t for t in all_trials.get("trials", [])
-                     if t.get("status") == "completed" and
+                     if is_trial_completed(t) and
                      t.get("objectives", {}).get("accuracy_change") is not None]
 
     # 建立 Pareto 解的識別集合
@@ -410,7 +441,7 @@ def create_trials_table(trials_data: Dict, targets: Dict = None) -> pd.DataFrame
 
         table_data.append({
             "試驗": i,
-            "狀態": t.get("status", "unknown"),
+            "狀態": get_trial_status(t),
             "方法": config.get("method", "-"),
             "位元數": str(bits) if bits is not None else "-",
             "群組大小": str(group_size) if group_size is not None else "-",
@@ -524,7 +555,7 @@ def create_correlation_heatmap(tradeoff_data: Dict) -> go.Figure:
 def create_method_comparison_chart(all_trials: Dict) -> go.Figure:
     """建立量化方法比較圖表 - 2x2 子圖布局，含誤差條"""
     trials = all_trials.get("trials", [])
-    completed = [t for t in trials if t.get("status") == "completed" and t.get("objectives")]
+    completed = [t for t in trials if is_trial_completed(t) and t.get("objectives")]
 
     # 按方法分組統計
     method_stats = {}
@@ -1275,8 +1306,7 @@ def render_summary_tab(data: Dict):
             st.write("**配置參數**")
             config = recommended.get("config", {})
             for key, value in config.items():
-                if key != "modules_to_not_convert":
-                    st.write(f"- {key}: `{value}`")
+                st.write(f"- {key}: `{value}`")
 
         with col2:
             st.write("**預期效果**")
@@ -1369,11 +1399,11 @@ def render_trials_tab(data: Dict):
         st.warning("沒有試驗資料")
         return
 
-    # 統計
+    # 統計（使用兼容函數）
     trials = all_trials["trials"]
-    completed = len([t for t in trials if t.get("status") == "completed"])
-    failed = len([t for t in trials if t.get("status") == "failed"])
-    pruned = len([t for t in trials if t.get("status") == "pruned"])
+    completed = len([t for t in trials if get_trial_status(t) == "completed"])
+    failed = len([t for t in trials if get_trial_status(t) == "failed"])
+    pruned = len([t for t in trials if get_trial_status(t) == "pruned"])
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -1425,7 +1455,7 @@ def render_trials_tab(data: Dict):
     # ==========================================
     st.subheader("📋 試驗詳細參數")
 
-    completed_trials = [t for t in trials if t.get("status") == "completed"]
+    completed_trials = [t for t in trials if is_trial_completed(t)]
     if not completed_trials:
         st.info("沒有完成的試驗可以檢視")
         return
@@ -2157,6 +2187,76 @@ def render_config_tab(data: Dict):
                 for key, value in tpe_params.items():
                     st.write(f"- {key}: `{value}`")
 
+    # LLM 多代理優化器配置
+    if "llm" in opt_type.lower():
+        llm_config = optimizer.get("llm_agent", {})
+        if llm_config:
+            st.write("**🤖 LLM 代理配置**")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.write(f"**提供者**: `{llm_config.get('provider', 'N/A')}`")
+                st.write(f"**模型**: `{llm_config.get('model', 'N/A')}`")
+            with col2:
+                prompt_config = llm_config.get("prompt", {})
+                st.write(f"**Prompt 類型**: `{prompt_config.get('type', 'N/A')}`")
+                st.write(f"**Prompt 配置檔**: `{prompt_config.get('config_file', 'N/A')}`")
+            with col3:
+                st.write(f"**溫度**: `{llm_config.get('temperature', 'N/A')}`")
+                st.write(f"**最大 Token**: `{llm_config.get('max_tokens', 'N/A')}`")
+
+            # Agent 溫度設定
+            agent_temps = llm_config.get("agent_temperatures", {})
+            if agent_temps:
+                st.write("**Agent 溫度設定**:")
+                temp_cols = st.columns(len(agent_temps))
+                for i, (agent, temp) in enumerate(agent_temps.items()):
+                    with temp_cols[i]:
+                        st.metric(agent.capitalize(), f"{temp}")
+
+            # 試驗數限制
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"**最小試驗數**: `{llm_config.get('min_trials', 'N/A')}`")
+            with col2:
+                st.write(f"**最大試驗數**: `{llm_config.get('max_trials', 'N/A')}`")
+
+        # 停止條件
+        stopping = optimizer.get("stopping", {})
+        if stopping:
+            with st.expander("⏹️ 停止條件"):
+                budget = stopping.get("budget", {})
+                convergence = stopping.get("convergence", {})
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**預算限制**:")
+                    st.write(f"- 最大試驗數: `{budget.get('max_trials', 'N/A')}`")
+                    st.write(f"- 最大時間 (小時): `{budget.get('max_time_hours', 'N/A')}`")
+                with col2:
+                    st.write("**收斂條件**:")
+                    st.write(f"- 啟用: `{convergence.get('enabled', False)}`")
+                    if convergence.get("enabled"):
+                        st.write(f"- 視窗大小: `{convergence.get('window', 'N/A')}`")
+                        st.write(f"- 閾值: `{convergence.get('threshold', 'N/A')}`")
+
+        # 驗證規則
+        validation = optimizer.get("validation", {})
+        if validation:
+            with st.expander("✅ 驗證規則"):
+                rules = validation.get("rules", [])
+                if rules:
+                    st.write("**規則**:")
+                    for rule in rules:
+                        st.write(f"- `{rule}`")
+                st.write(f"**檢查 GPU 記憶體**: `{validation.get('check_gpu_memory', False)}`")
+                st.write(f"**預期最大 GPU (GB)**: `{validation.get('max_expected_gpu_gb', 'N/A')}`")
+
+        # 失敗處理
+        fallback = optimizer.get("fallback", {})
+        if fallback:
+            with st.expander("🔄 失敗處理"):
+                st.write(f"**LLM 失敗時**: `{fallback.get('on_llm_failure', 'N/A')}`")
+                st.write(f"**最大 LLM 失敗次數**: `{fallback.get('max_llm_failures', 'N/A')}`")
+
     st.divider()
 
     # ==========================================
@@ -2330,38 +2430,366 @@ def render_conversations_tab(data: Dict):
                 # 根據訊息類型顯示不同內容
                 if msg_type == "analysis_report":
                     analysis = content.get("analysis", {})
-                    st.write("**分析摘要**")
+                    input_summary = content.get("input_summary", {})
 
-                    if analysis.get("unexplored_regions"):
-                        st.write("未探索區域:")
-                        for region in analysis["unexplored_regions"][:3]:
-                            st.write(f"- {region}")
+                    # 輸入摘要
+                    if input_summary:
+                        st.write("**📥 輸入摘要**")
+                        sum_cols = st.columns(3)
+                        with sum_cols[0]:
+                            st.metric("試驗數", input_summary.get("trials_count", 0))
+                        with sum_cols[1]:
+                            st.metric("Pareto 解", input_summary.get("pareto_count", 0))
+                        with sum_cols[2]:
+                            methods = input_summary.get("methods_available", [])
+                            st.metric("可用方法", ", ".join(methods) if methods else "N/A")
 
-                    if analysis.get("recommendations"):
-                        st.write("建議:")
-                        for rec in analysis["recommendations"][:3]:
-                            st.write(f"- {rec}")
+                    st.divider()
+
+                    # 失敗模式分析
+                    failure_patterns = analysis.get("failure_patterns", [])
+                    if failure_patterns:
+                        st.write("**⚠️ 失敗模式分析**")
+                        for i, pattern in enumerate(failure_patterns, 1):
+                            with st.container():
+                                pattern_name = pattern.get("pattern", "未知模式")
+                                confidence = pattern.get("confidence", 0)
+                                st.markdown(f"**{i}. {pattern_name}** (信心度: {confidence*100:.0f}%)")
+                                affected = pattern.get("affected_configs", [])
+                                if affected:
+                                    st.write("受影響的配置:")
+                                    for cfg in affected[:5]:
+                                        if isinstance(cfg, dict):
+                                            method = cfg.get("method", "unknown")
+                                            params = {k: v for k, v in cfg.items() if k != "method"}
+                                            st.code(f"{method}: {params}", language=None)
+                                        else:
+                                            st.code(str(cfg), language=None)
+
+                    # 未探索區域
+                    unexplored = analysis.get("unexplored_regions", [])
+                    if unexplored:
+                        st.write("**🔭 未探索區域**")
+                        for i, region in enumerate(unexplored, 1):
+                            method = region.get("method", "unknown")
+                            params = region.get("params", {})
+                            score = region.get("exploration_score", 0)
+                            rationale = region.get("rationale", "")
+
+                            with st.expander(f"{i}. {method} (探索分數: {score:.2f})", expanded=False):
+                                st.write(f"**理由**: {rationale}")
+                                st.write("**建議參數**:")
+                                st.json(params)
+
+                    # 參數敏感度
+                    param_sensitivity = analysis.get("parameter_sensitivity", {})
+                    if param_sensitivity:
+                        st.write("**📊 參數敏感度分析**")
+                        param_name = param_sensitivity.get("parameter", "N/A")
+                        impact = param_sensitivity.get("impact_score", 0)
+                        observation = param_sensitivity.get("observation", "")
+
+                        sens_cols = st.columns([1, 1, 2])
+                        with sens_cols[0]:
+                            st.metric("關鍵參數", param_name)
+                        with sens_cols[1]:
+                            st.metric("影響分數", f"{impact:.2f}")
+                        with sens_cols[2]:
+                            st.info(f"💡 {observation}")
+
+                    # Pareto 品質
+                    pareto_quality = analysis.get("pareto_quality", {})
+                    if pareto_quality:
+                        st.write("**🎯 Pareto 前沿品質**")
+                        pq_cols = st.columns([1, 1, 2])
+                        with pq_cols[0]:
+                            diversity = pareto_quality.get("diversity", 0)
+                            st.metric("多樣性", f"{diversity:.2f}" if isinstance(diversity, (int, float)) else diversity)
+                        with pq_cols[1]:
+                            coverage = pareto_quality.get("coverage", 0)
+                            st.metric("覆蓋率", f"{coverage:.2f}" if isinstance(coverage, (int, float)) else coverage)
+                        with pq_cols[2]:
+                            improvement = pareto_quality.get("improvement_rate", "N/A")
+                            if improvement and improvement != "N/A":
+                                st.info(f"📈 **改進趨勢**: {improvement}")
+
+                    # 建議
+                    recommendations = analysis.get("recommendations", [])
+                    if recommendations:
+                        st.write("**💡 建議**")
+                        for rec in recommendations:
+                            if isinstance(rec, dict):
+                                st.write(f"- {rec.get('recommendation', rec)}")
+                            else:
+                                st.write(f"- {rec}")
 
                 elif msg_type == "strategy_decision":
                     decision = content.get("decision", {})
-                    st.write(f"**策略**: {decision.get('strategy', 'N/A')}")
-                    st.write(f"**理由**: {decision.get('rationale', 'N/A')}")
-                    st.write(f"**信心度**: {decision.get('confidence', 0)*100:.0f}%")
+                    input_summary = content.get("input_summary", {})
 
+                    # 輸入摘要
+                    if input_summary:
+                        st.write("**📥 輸入摘要**")
+                        sum_cols = st.columns(3)
+                        with sum_cols[0]:
+                            st.metric("試驗編號", input_summary.get("trial_num", "N/A"))
+                        with sum_cols[1]:
+                            st.metric("預算進度", input_summary.get("budget_progress", "N/A"))
+                        with sum_cols[2]:
+                            st.metric("Pareto 解數", input_summary.get("pareto_size", 0))
+
+                    st.divider()
+
+                    # 策略決策
+                    strategy = decision.get("strategy", "N/A")
+                    strategy_icons = {"exploration": "🔍", "exploitation": "🎯", "balanced": "⚖️"}
+                    st.write(f"**策略**: {strategy_icons.get(strategy, '📋')} {strategy}")
+                    st.write(f"**理由**: {decision.get('rationale', 'N/A')}")
+
+                    conf_cols = st.columns(2)
+                    with conf_cols[0]:
+                        st.metric("信心度", f"{decision.get('confidence', 0)*100:.0f}%")
+
+                    # 預期目標
+                    expected = decision.get("expected_objectives", {})
+                    if expected:
+                        st.write("**📈 預期目標變化**")
+                        exp_cols = st.columns(3)
+                        with exp_cols[0]:
+                            acc = expected.get("accuracy_change", 0)
+                            if isinstance(acc, (int, float)):
+                                # 判斷是百分比還是小數
+                                if abs(acc) > 1:
+                                    st.metric("準確率", f"{acc:+.1f}%")
+                                else:
+                                    st.metric("準確率", f"{acc*100:+.1f}%")
+                        with exp_cols[1]:
+                            gpu = expected.get("gpu_peak_change", 0)
+                            if isinstance(gpu, (int, float)):
+                                if abs(gpu) > 1:
+                                    st.metric("GPU 記憶體", f"{gpu:+.1f}%")
+                                else:
+                                    st.metric("GPU 記憶體", f"{gpu*100:+.1f}%")
+                        with exp_cols[2]:
+                            lat = expected.get("latency_change", 0)
+                            if isinstance(lat, (int, float)):
+                                if abs(lat) > 1:
+                                    st.metric("延遲", f"{lat:+.1f}%")
+                                else:
+                                    st.metric("延遲", f"{lat*100:+.1f}%")
+
+                    # 下一個配置
                     next_config = decision.get("next_config", {})
                     if next_config:
-                        st.write("**下一個配置**:")
+                        st.write("**🔧 下一個配置**")
                         st.json(next_config)
 
-                elif msg_type == "progress_assessment":
-                    st.write(f"**收斂狀態**: {content.get('convergence_status', 'N/A')}")
-                    st.write(f"**建議**: {content.get('recommendation', 'N/A')}")
+                    # 備選配置
+                    alternatives = decision.get("alternative_configs", [])
+                    if alternatives:
+                        with st.expander(f"🔄 備選配置 ({len(alternatives)} 個)", expanded=False):
+                            for i, alt in enumerate(alternatives, 1):
+                                st.write(f"**備選 {i}:**")
+                                st.json(alt)
 
-                    if content.get("should_stop"):
-                        st.warning("建議停止優化")
+                elif msg_type == "progress_assessment":
+                    # 兼容兩種格式：舊格式直接在 content 中，新格式在 content.assessment 中
+                    assessment = content.get("assessment", content)
+                    input_summary = content.get("input_summary", {})
+
+                    # 輸入摘要
+                    if input_summary:
+                        st.write("**📥 輸入摘要**")
+                        sum_cols = st.columns(4)
+                        with sum_cols[0]:
+                            st.metric("試驗數", input_summary.get("trials_count", 0))
+                        with sum_cols[1]:
+                            st.metric("Pareto 解", input_summary.get("pareto_count", 0))
+                        with sum_cols[2]:
+                            st.metric("已用預算", input_summary.get("budget_used", 0))
+                        with sum_cols[3]:
+                            st.metric("預算上限", input_summary.get("budget_max", 0))
+
+                    st.divider()
+
+                    # 評估結果
+                    should_stop = assessment.get("should_stop", content.get("should_stop", False))
+                    reason = assessment.get("reason", "N/A")
+                    convergence = assessment.get("convergence_score", assessment.get("convergence_status", "N/A"))
+                    recommendation = assessment.get("recommendation", "N/A")
+
+                    # 停止建議狀態
+                    if should_stop:
+                        reason_labels = {
+                            "target_met": "✅ 已達成目標",
+                            "convergence": "📊 已收斂",
+                            "budget_exhausted": "💰 預算耗盡",
+                            "continue": "▶️ 繼續"
+                        }
+                        st.warning(f"**建議停止優化** - {reason_labels.get(reason, reason)}")
+                    else:
+                        st.success("**建議繼續優化**")
+
+                    # 收斂分數
+                    if isinstance(convergence, (int, float)):
+                        st.metric("收斂分數", f"{convergence:.2f}")
+                    else:
+                        st.write(f"**收斂狀態**: {convergence}")
+
+                    # 進度指標
+                    progress = assessment.get("progress_metrics", {})
+                    if progress:
+                        st.write("**📊 進度指標**")
+                        prog_cols = st.columns(4)
+                        with prog_cols[0]:
+                            pir = progress.get("pareto_improvement_rate", 0)
+                            st.metric("Pareto 改進率", f"{pir:.2%}" if isinstance(pir, (int, float)) else pir)
+                        with prog_cols[1]:
+                            ts = progress.get("target_satisfaction", 0)
+                            st.metric("目標滿足度", f"{ts:.2%}" if isinstance(ts, (int, float)) else ts)
+                        with prog_cols[2]:
+                            bu = progress.get("budget_used", 0)
+                            st.metric("預算使用率", f"{bu:.2%}" if isinstance(bu, (int, float)) else bu)
+                        with prog_cols[3]:
+                            tsi = progress.get("trials_since_improvement", 0)
+                            st.metric("距上次改進", f"{tsi} 試驗")
+
+                    # 建議
+                    st.info(f"💡 **建議**: {recommendation}")
+
+                    # 是否為規則式評估
+                    if content.get("rule_based"):
+                        st.caption("ℹ️ 此評估為規則式判斷（非 LLM）")
 
                 else:
                     st.json(content)
+
+                # 所有訊息類型都提供查看原始 JSON 的選項
+                st.divider()
+                with st.expander("📄 查看原始 JSON", expanded=False):
+                    st.json(msg)
+
+
+def render_prompt_tab(data: Dict):
+    """渲染 Prompt 配置標籤頁"""
+    prompt_data = data.get("prompt_config_used")
+
+    if not prompt_data:
+        st.info("此實驗沒有 Prompt 配置記錄（可能是較舊的實驗或非 LLM 優化實驗）")
+        return
+
+    st.subheader("📝 Prompt 配置資訊")
+
+    # 基本資訊
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Prompt 類型", prompt_data.get("prompt_type", "N/A"))
+    with col2:
+        metadata = prompt_data.get("metadata", {})
+        st.metric("版本", metadata.get("version", "N/A"))
+    with col3:
+        supported = prompt_data.get("supported_types", [])
+        st.metric("支援類型數", len(supported))
+
+    # Metadata
+    st.write("**Metadata**")
+    metadata = prompt_data.get("metadata", {})
+    st.write(f"- 名稱: `{metadata.get('name', 'N/A')}`")
+    st.write(f"- 描述: `{metadata.get('description', 'N/A')}`")
+    st.write(f"- 配置檔路徑: `{prompt_data.get('config_path', 'N/A')}`")
+    st.write(f"- 支援的類型: `{', '.join(prompt_data.get('supported_types', []))}`")
+
+    st.divider()
+
+    # Prompts 詳細內容
+    prompts = prompt_data.get("prompts", {})
+
+    # Agent tabs
+    agent_tabs = st.tabs(["🔍 Analyzer", "📋 Planner", "📊 Monitor", "🔧 Formatting"])
+
+    with agent_tabs[0]:
+        st.subheader("Analyzer Agent Prompt")
+        analyzer = prompts.get("analyzer", {})
+        if analyzer:
+            st.write("**System Role**")
+            st.code(analyzer.get("system_role", "N/A"), language=None)
+
+            st.write("**Task Description**")
+            st.code(analyzer.get("task_description", "N/A"), language=None)
+
+            with st.expander("Analysis Requirements", expanded=False):
+                st.code(analyzer.get("analysis_requirements", "N/A"), language=None)
+
+            with st.expander("Output Format", expanded=False):
+                st.code(analyzer.get("output_format", "N/A"), language=None)
+
+            with st.expander("Section Headers", expanded=False):
+                st.json(analyzer.get("section_headers", {}))
+
+            with st.expander("Labels", expanded=False):
+                st.json(analyzer.get("labels", {}))
+        else:
+            st.info("沒有 Analyzer prompt 資料")
+
+    with agent_tabs[1]:
+        st.subheader("Planner Agent Prompt")
+        planner = prompts.get("planner", {})
+        if planner:
+            st.write("**System Role**")
+            st.code(planner.get("system_role", "N/A"), language=None)
+
+            with st.expander("Strategy Guide", expanded=False):
+                st.code(planner.get("strategy_guide", "N/A"), language=None)
+
+            with st.expander("Progress Recommendation", expanded=False):
+                st.code(planner.get("progress_recommendation", "N/A"), language=None)
+
+            with st.expander("Output Format", expanded=False):
+                st.code(planner.get("output_format", "N/A"), language=None)
+
+            with st.expander("Section Headers", expanded=False):
+                st.json(planner.get("section_headers", {}))
+
+            with st.expander("Labels", expanded=False):
+                st.json(planner.get("labels", {}))
+        else:
+            st.info("沒有 Planner prompt 資料")
+
+    with agent_tabs[2]:
+        st.subheader("Monitor Agent Prompt")
+        monitor = prompts.get("monitor", {})
+        if monitor:
+            st.write("**System Role**")
+            st.code(monitor.get("system_role", "N/A"), language=None)
+
+            with st.expander("Stopping Criteria", expanded=False):
+                st.code(monitor.get("stopping_criteria", "N/A"), language=None)
+
+            with st.expander("Output Format", expanded=False):
+                st.code(monitor.get("output_format", "N/A"), language=None)
+
+            with st.expander("Section Headers", expanded=False):
+                st.json(monitor.get("section_headers", {}))
+
+            with st.expander("Labels", expanded=False):
+                st.json(monitor.get("labels", {}))
+        else:
+            st.info("沒有 Monitor prompt 資料")
+
+    with agent_tabs[3]:
+        st.subheader("Formatting 設定")
+        formatting = prompts.get("formatting", {})
+        if formatting:
+            st.json(formatting)
+        else:
+            st.info("沒有 Formatting 資料")
+
+    st.divider()
+
+    # 完整 JSON 下載
+    st.subheader("📥 完整 Prompt 配置")
+    with st.expander("查看完整 JSON", expanded=False):
+        st.json(prompt_data)
 
 
 # ==========================================
@@ -2416,7 +2844,7 @@ def main():
 
         # 根據實驗類型決定標籤頁
         if exp_type == "LLM 多代理優化":
-            tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+            tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
                 "📋 實驗摘要",
                 "⚙️ 實驗配置",
                 "📈 Pareto 前沿",
@@ -2424,7 +2852,8 @@ def main():
                 "✅ 滿足目標",
                 "🔬 深度分析",
                 "⚠️ 剪枝/失敗",
-                "💬 Agent 對話"
+                "💬 Agent 對話",
+                "📝 Prompt 配置"
             ])
         else:
             tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
@@ -2437,6 +2866,7 @@ def main():
                 "⚠️ 剪枝/失敗"
             ])
             tab8 = None
+            tab9 = None
 
         with tab1:
             render_summary_tab(data)
@@ -2462,6 +2892,10 @@ def main():
         if tab8 is not None:
             with tab8:
                 render_conversations_tab(data)
+
+        if tab9 is not None:
+            with tab9:
+                render_prompt_tab(data)
 
 
 if __name__ == "__main__":

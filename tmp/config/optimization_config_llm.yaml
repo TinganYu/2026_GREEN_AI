@@ -3,14 +3,14 @@
 # ============================================
 
 experiment:
-  name: "gemma-2-2b-it"    #llm-multiagent-mvp
+  name: "Llama-3.2-1B-Instruct"    #llm-multiagent-mvp
   output_dir: "results/llm_optimization"
 
 # --------------------------------------------
 # 1. 基線配置
 # --------------------------------------------
 baseline:
-  model_name: "google/gemma-2-2b-it"
+  model_name: "meta-llama/Llama-3.2-1B-Instruct"
   model_dtype: "float16"
   device_map: "cuda:0"
   trust_remote_code: true
@@ -77,12 +77,18 @@ optimizer:
   llm_agent:
     # LLM Provider
     provider: "openai"  # or "anthropic"
-    model: "gpt-4o"
+    model: "gpt-5-mini"
     api_key_env: "OPENAI_API_KEY"
 
     # 生成參數
     temperature: 0.7
     max_tokens: 2048
+
+    # Prompt 配置
+    prompt:
+      config_file: "tmp/config/prompt_config.yaml"  # Prompt 配置檔路徑
+      type: "zh"  # Prompt 類型（參見 prompt_config.yaml 中的 supported_types）
+                  # 可選: "en" (English), "zh" (繁體中文), 或自定義類型
 
     # Agent特定溫度
     agent_temperatures:

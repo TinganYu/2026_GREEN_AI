@@ -13,6 +13,7 @@ from datetime import datetime
 from .base_optimizer import BaseOptimizer
 from .agents import AnalyzerAgent, PlannerAgent, MonitorAgent
 from .utils import LLMClient, ConversationLogger
+from .utils.prompt_templates import init_prompts, get_prompt_info
 
 logger = logging.getLogger("LLMMultiAgentOptimizer")
 logger.setLevel(logging.INFO)
@@ -40,6 +41,15 @@ class LLMMultiAgentOptimizer(BaseOptimizer):
         self.logging_config = config['optimizer'].get('logging', {})
 
         self.exp_dir = exp_dir
+
+        # 初始化 Prompt 配置
+        prompt_config = self.llm_config.get('prompt', {})
+        prompt_config_file = prompt_config.get('config_file')
+        prompt_type = prompt_config.get('type')
+        init_prompts(prompt_config_file, prompt_type)
+        self.prompt_info = get_prompt_info()
+        logger.info(f"Prompt type: {self.prompt_info['prompt_type']}")
+        logger.info(f"Prompt config: {self.prompt_info.get('config_path', 'built-in')}")
 
         # 初始化LLM客戶端
         self.llm_client = LLMClient(self.llm_config)
@@ -161,6 +171,7 @@ class LLMMultiAgentOptimizer(BaseOptimizer):
 
                 if trial_result.get('success', False):
                     logger.info("  ✓ Trial succeeded")
+                    trial_result['status'] = 'completed'
                     self.trials.append(trial_result)
 
                     if self.conversation_logger:
@@ -169,6 +180,9 @@ class LLMMultiAgentOptimizer(BaseOptimizer):
                         )
                 else:
                     logger.error(f"  ✗ Trial failed: {trial_result.get('error', 'Unknown')}")
+                    # 失敗的試驗也要記錄
+                    trial_result['status'] = 'failed'
+                    self.trials.append(trial_result)
 
                     if self.conversation_logger:
                         self.conversation_logger.log_trial_end(
@@ -260,7 +274,8 @@ class LLMMultiAgentOptimizer(BaseOptimizer):
             'n_satisfying_solutions': len(satisfying_solutions),
             'conversation_log': self.conversation_logger.get_conversation_history() if self.conversation_logger else [],
             'llm_failures': self.llm_failure_count,
-            'fallback_mode': self.fallback_mode
+            'fallback_mode': self.fallback_mode,
+            'prompt_info': self.prompt_info
         }
 
     def _run_analyzer(self, trial_num: int) -> Dict[str, Any]:

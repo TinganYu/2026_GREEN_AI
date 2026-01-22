@@ -142,6 +142,7 @@ class OptimizationOrchestrator:
             'total_time_sec': total_time,
             'baseline_results': baseline_results,
             'optimization_results': optimization_results,
+            'n_total_trials': optimization_results['n_total_trials'],
             'n_pareto_solutions': optimization_results['n_pareto_solutions'],
             'n_satisfying_solutions': optimization_results['n_satisfying_solutions'],
             'recommended_config': optimization_results['recommended_config']

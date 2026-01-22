@@ -112,7 +112,7 @@ def print_summary(results: dict):
 
     # 優化摘要
     print("\nOptimization Results:")
-    print(f"  Total Trials: {results['n_pareto_solutions'] + results.get('n_pruned', 0)}")
+    print(f"  Total Trials: {results['n_total_trials']}")
     print(f"  Pareto Solutions: {results['n_pareto_solutions']}")
     print(f"  Solutions Satisfying Targets: {results['n_satisfying_solutions']}")
     print(f"  Total Time: {results['total_time_sec']/60:.1f} minutes")

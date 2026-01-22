@@ -87,15 +87,35 @@ class OpenAIProvider(BaseLLMProvider):
     def generate(self, prompt: str, temperature: float, max_tokens: int) -> str:
         """調用OpenAI API"""
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
+            # 較新的 OpenAI 模型（gpt-5-*, o1-*, o3-* 等）有不同的 API 限制：
+            # - 使用 max_completion_tokens 而非 max_tokens
+            # - 不支援自訂 temperature（只能用預設值 1）
+            is_new_model = any(
+                self.model.startswith(prefix)
+                for prefix in ['gpt-5', 'o1', 'o3']
             )
+
+            if is_new_model:
+                # 新模型：不傳遞 temperature 參數
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    max_completion_tokens=max_tokens,
+                    messages=[{
+                        "role": "user",
+                        "content": prompt
+                    }]
+                )
+            else:
+                # 舊模型（gpt-4o, gpt-4, gpt-3.5-turbo）
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    messages=[{
+                        "role": "user",
+                        "content": prompt
+                    }]
+                )
 
             return response.choices[0].message.content
 
@@ -233,27 +253,56 @@ class LLMClient:
         Returns:
             解析後的JSON字典，或None（失敗）
         """
+        def fix_python_to_json(s: str) -> str:
+            """將 Python 風格的值轉換為 JSON 風格"""
+            # 替換 Python 布林值和 None 為 JSON 格式
+            # 注意：只替換獨立的關鍵字，避免替換字串中的內容
+            s = re.sub(r'\bTrue\b', 'true', s)
+            s = re.sub(r'\bFalse\b', 'false', s)
+            s = re.sub(r'\bNone\b', 'null', s)
+            return s
+
+        def try_parse(s: str) -> Optional[Dict]:
+            """嘗試解析 JSON，先嘗試原始內容，再嘗試修復後的內容"""
+            try:
+                return json.loads(s)
+            except json.JSONDecodeError:
+                pass
+            # 嘗試修復 Python 風格的值
+            try:
+                return json.loads(fix_python_to_json(s))
+            except json.JSONDecodeError:
+                pass
+            return None
+
         # 策略1: 直接解析
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
+        result = try_parse(text)
+        if result:
+            return result
 
         # 策略2: 尋找```json...```代碼塊
-        json_code_block = re.search(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)
+        json_code_block = re.search(r'```json\s*([\s\S]*?)\s*```', text)
         if json_code_block:
-            try:
-                return json.loads(json_code_block.group(1))
-            except json.JSONDecodeError:
-                pass
+            json_content = json_code_block.group(1).strip()
+            result = try_parse(json_content)
+            if result:
+                return result
 
-        # 策略3: 尋找{ ... }對象
-        json_object = re.search(r'\{.*\}', text, re.DOTALL)
+        # 策略3: 尋找```...```代碼塊（無語言標記）
+        code_block = re.search(r'```\s*([\s\S]*?)\s*```', text)
+        if code_block:
+            content = code_block.group(1).strip()
+            if content.startswith('{'):
+                result = try_parse(content)
+                if result:
+                    return result
+
+        # 策略4: 尋找{ ... }對象（貪婪匹配最外層大括號）
+        json_object = re.search(r'\{[\s\S]*\}', text)
         if json_object:
-            try:
-                return json.loads(json_object.group(0))
-            except json.JSONDecodeError:
-                pass
+            result = try_parse(json_object.group(0))
+            if result:
+                return result
 
         # 所有策略都失敗
         logger.warning(f"Could not extract JSON from text:\n{text[:200]}...")

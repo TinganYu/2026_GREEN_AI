@@ -1,0 +1,403 @@
+# Prompt Configuration for LLM Multi-Agent Optimization
+# 支援多種 prompt 類型，可擴展至不同語言、風格、任務類型等
+
+# 預設類型
+default_type: "en"
+
+# 支援的類型列表（可擴展：語言、風格、任務類型等）
+supported_types:
+  - "en"      # English
+  - "zh"      # 繁體中文
+  # 未來可擴展：
+  # - "en_concise"    # 簡潔英文版
+  # - "en_detailed"   # 詳細英文版
+  # - "zh_formal"     # 正式中文版
+  # - "task_specific" # 特定任務版
+
+
+# ========== Prompt 模板定義 ==========
+prompts:
+  # ==================== English Version ====================
+  en:
+    metadata:
+      name: "English"
+      description: "Standard English prompts for LLM multi-agent optimization"
+      version: "1.0"
+
+    analyzer:
+      system_role: "You are an expert analyzer for quantization optimization trials."
+
+      task_description: |
+        Analyze the historical trials and identify patterns, failures, and unexplored regions.
+
+      analysis_requirements: |
+        Provide a comprehensive analysis in JSON format with these fields:
+
+        1. **failure_patterns**: List of failure patterns identified
+           - pattern: Description of the pattern
+           - confidence: 0.0-1.0 (how confident you are)
+           - affected_configs: List of similar configs that might fail
+
+        2. **unexplored_regions**: Promising parameter combinations not yet tried
+           - method: quantization method
+           - params: specific parameter values
+           - exploration_score: 0.0-1.0 (how valuable to explore)
+           - rationale: why this region is promising
+
+        3. **parameter_sensitivity**: Which parameters have the most impact
+           - parameter: parameter name
+           - impact_score: 0.0-1.0 (higher = more important)
+           - observation: what you observed
+
+        4. **pareto_quality**: Quality assessment of Pareto frontier
+           - diversity: 0.0-1.0 (spread across objectives)
+           - coverage: 0.0-1.0 (% of theoretical frontier covered)
+           - improvement_rate: trend of new solutions added
+
+        5. **recommendations**: List of strategic recommendations
+           - recommendation: brief actionable advice
+
+      output_format: |
+        Output ONLY a JSON object (no other text):
+        {
+          "failure_patterns": [...],
+          "unexplored_regions": [...],
+          "parameter_sensitivity": {...},
+          "pareto_quality": {...},
+          "recommendations": [...]
+        }
+
+      section_headers:
+        your_task: "# Your Task"
+        historical_trials: "# Historical Trials Summary"
+        pareto_frontier: "# Current Pareto Frontier"
+        search_space: "# Search Space"
+        analysis_req: "# Analysis Requirements"
+
+      labels:
+        total_trials: "Total trials"
+        successful_trials: "Successful trials"
+        failed_trials: "Failed/Pruned trials"
+        non_dominated_solutions: "non-dominated solutions found"
+        recent_trials: "Recent trials"
+        no_trials: "No trials yet."
+        no_pareto: "No Pareto solutions yet."
+
+    planner:
+      system_role: "You are a strategic planner for quantization optimization."
+
+      strategy_guide: |
+        # Strategy Selection Guide
+        - **EXPLORATION** (early phase or when stuck):
+          - Try unexplored parameter regions
+          - Test diverse configurations
+          - Focus on coverage
+
+        - **EXPLOITATION** (mid-late phase with good patterns):
+          - Refine promising configurations
+          - Small perturbations around successful trials
+          - Focus on improvement
+
+        - **BALANCED**:
+          - Mix of both strategies
+          - Good default choice
+
+      progress_recommendation: |
+        # Recommended Strategy Based on Progress
+        - < 20% progress: Prefer EXPLORATION (70%)
+        - 20-70% progress: BALANCED (50/50)
+        - > 70% progress: Prefer EXPLOITATION (80%)
+
+      output_format: |
+        Provide your decision in JSON format:
+
+        {
+          "strategy": "exploration" / "exploitation" / "balanced",
+          "next_config": {
+            "method": "gptq" / "awq" / "bnb",
+            "bits": ...,
+            "group_size": ...,
+            ... (all relevant parameters)
+          },
+          "rationale": "Explain why you chose this config (2-3 sentences)",
+          "confidence": 0.0-1.0,
+          "expected_objectives": {
+            "accuracy_change": expected value,
+            "gpu_peak_change": expected value,
+            "latency_change": expected value
+          },
+          "alternative_configs": [
+            {...},  # Backup option 1
+            {...}   # Backup option 2
+          ]
+        }
+
+        Output ONLY the JSON object (no other text).
+
+      section_headers:
+        current_state: "# Current State"
+        analysis_from_analyzer: "# Analysis from AnalyzerAgent"
+        optimization_targets: "# Optimization Targets"
+        pareto_frontier: "# Current Pareto Frontier"
+        your_task: "# Your Task"
+
+      labels:
+        trial: "Trial"
+        progress: "Progress"
+        budget_remaining: "Budget remaining"
+        trials: "trials"
+        solutions_on_frontier: "solutions on frontier"
+        decide_next_config: "Decide the next trial configuration based on the analysis."
+
+    monitor:
+      system_role: "You are monitoring the optimization progress."
+
+      stopping_criteria: |
+        # Stopping Criteria to Consider
+        1. **CONVERGENCE**: Pareto front hasn't improved in last N trials
+        2. **TARGET_MET**: Found solutions satisfying all user targets
+        3. **BUDGET**: Budget almost exhausted (>95%)
+        4. **DIMINISHING_RETURNS**: Little improvement despite many trials
+
+      output_format: |
+        Provide assessment in JSON:
+
+        {
+          "should_stop": true / false,
+          "reason": "convergence" / "target_met" / "budget_exhausted" / "continue" / null,
+          "convergence_score": 0.0-1.0,  # 0=no convergence, 1=fully converged
+          "progress_metrics": {
+            "pareto_improvement_rate": recent improvement rate,
+            "target_satisfaction": % of targets met (0.0-1.0),
+            "budget_used": % of budget consumed (0.0-1.0),
+            "trials_since_improvement": count
+          },
+          "recommendation": "Brief recommendation (1-2 sentences)"
+        }
+
+        Output ONLY the JSON object (no other text).
+
+      section_headers:
+        progress_summary: "# Progress Summary"
+        budget_status: "# Budget Status"
+        targets_vs_best: "# Targets vs Current Best"
+        your_task: "# Your Task"
+
+      labels:
+        total_trials: "Total trials"
+        successful_trials: "Successful trials"
+        pareto_solutions: "Pareto solutions"
+        satisfying_targets: "Satisfying targets"
+        trials_used: "Trials used"
+        progress: "Progress"
+        evaluate_task: "Evaluate whether optimization should continue or stop."
+        targets: "Targets"
+        accuracy_min: "accuracy_min"
+        gpu_peak_max: "gpu_peak_max"
+        latency_max: "latency_max"
+        best_solution: "Best solution"
+        accuracy: "accuracy"
+        gpu_peak: "gpu_peak"
+        latency: "latency"
+        satisfies_targets: "Satisfies targets"
+        no_solutions: "No solutions to compare."
+
+    formatting:
+      methods: "Methods"
+      and_more: "... and {count} more"
+      trial_format: "Trial {num}"
+      config_format: "{method}-{bits}bit"
+      objectives_format: "acc:{acc}, gpu:{gpu}, lat:{lat}"
+
+
+  # ==================== 繁體中文版本 ====================
+  zh:
+    metadata:
+      name: "繁體中文"
+      description: "LLM 多代理優化的繁體中文提示詞"
+      version: "1.0"
+
+    analyzer:
+      system_role: "你是一位量化優化試驗的專家分析師。"
+
+      task_description: |
+        分析歷史試驗數據，識別模式、失敗原因和未探索的區域。
+
+      analysis_requirements: |
+        以 JSON 格式提供完整的分析報告，包含以下欄位：
+
+        1. **failure_patterns（失敗模式）**: 識別到的失敗模式列表
+           - pattern: 模式描述
+           - confidence: 0.0-1.0（置信度）
+           - affected_configs: 可能會失敗的相似配置列表
+
+        2. **unexplored_regions（未探索區域）**: 尚未嘗試的有潛力參數組合
+           - method: 量化方法
+           - params: 具體參數值
+           - exploration_score: 0.0-1.0（探索價值）
+           - rationale: 為何此區域值得探索
+
+        3. **parameter_sensitivity（參數敏感度）**: 哪些參數影響最大
+           - parameter: 參數名稱
+           - impact_score: 0.0-1.0（影響程度，越高越重要）
+           - observation: 觀察結果
+
+        4. **pareto_quality（Pareto 前沿品質）**: Pareto 前沿的品質評估
+           - diversity: 0.0-1.0（目標間的分散程度）
+           - coverage: 0.0-1.0（覆蓋理論前沿的百分比）
+           - improvement_rate: 新解決方案添加的趨勢
+
+        5. **recommendations（建議）**: 策略性建議列表
+           - recommendation: 簡短可行的建議
+
+      output_format: |
+        僅輸出 JSON 物件（不要有其他文字）：
+        {
+          "failure_patterns": [...],
+          "unexplored_regions": [...],
+          "parameter_sensitivity": {...},
+          "pareto_quality": {...},
+          "recommendations": [...]
+        }
+
+      section_headers:
+        your_task: "# 你的任務"
+        historical_trials: "# 歷史試驗摘要"
+        pareto_frontier: "# 當前 Pareto 前沿"
+        search_space: "# 搜尋空間"
+        analysis_req: "# 分析要求"
+
+      labels:
+        total_trials: "總試驗次數"
+        successful_trials: "成功試驗"
+        failed_trials: "失敗/剪枝試驗"
+        non_dominated_solutions: "個非支配解"
+        recent_trials: "最近試驗"
+        no_trials: "尚無試驗數據。"
+        no_pareto: "尚無 Pareto 解。"
+
+    planner:
+      system_role: "你是量化優化的策略規劃師。"
+
+      strategy_guide: |
+        # 策略選擇指南
+        - **EXPLORATION（探索）**（早期階段或陷入困境時）：
+          - 嘗試未探索的參數區域
+          - 測試多樣化的配置
+          - 注重覆蓋範圍
+
+        - **EXPLOITATION（利用）**（中後期且有良好模式時）：
+          - 精細調整有潛力的配置
+          - 在成功試驗周圍進行小幅調整
+          - 注重改善
+
+        - **BALANCED（平衡）**：
+          - 兩種策略的混合
+          - 良好的預設選擇
+
+      progress_recommendation: |
+        # 基於進度的建議策略
+        - < 20% 進度：傾向 EXPLORATION（70%）
+        - 20-70% 進度：BALANCED（50/50）
+        - > 70% 進度：傾向 EXPLOITATION（80%）
+
+      output_format: |
+        以 JSON 格式提供你的決策：
+
+        {
+          "strategy": "exploration" / "exploitation" / "balanced",
+          "next_config": {
+            "method": "gptq" / "awq" / "bnb",
+            "bits": ...,
+            "group_size": ...,
+            ...（所有相關參數）
+          },
+          "rationale": "解釋你選擇此配置的原因（2-3 句話）",
+          "confidence": 0.0-1.0,
+          "expected_objectives": {
+            "accuracy_change": 預期值,
+            "gpu_peak_change": 預期值,
+            "latency_change": 預期值
+          },
+          "alternative_configs": [
+            {...},  # 備選方案 1
+            {...}   # 備選方案 2
+          ]
+        }
+
+        僅輸出 JSON 物件（不要有其他文字）。
+
+      section_headers:
+        current_state: "# 當前狀態"
+        analysis_from_analyzer: "# 來自 AnalyzerAgent 的分析"
+        optimization_targets: "# 優化目標"
+        pareto_frontier: "# 當前 Pareto 前沿"
+        your_task: "# 你的任務"
+
+      labels:
+        trial: "試驗"
+        progress: "進度"
+        budget_remaining: "剩餘預算"
+        trials: "次試驗"
+        solutions_on_frontier: "個解在前沿上"
+        decide_next_config: "根據分析決定下一個試驗配置。"
+
+    monitor:
+      system_role: "你正在監控優化進度。"
+
+      stopping_criteria: |
+        # 需要考慮的停止條件
+        1. **CONVERGENCE（收斂）**：Pareto 前沿在最近 N 次試驗中沒有改善
+        2. **TARGET_MET（達標）**：找到滿足所有使用者目標的解決方案
+        3. **BUDGET（預算）**：預算幾乎耗盡（>95%）
+        4. **DIMINISHING_RETURNS（收益遞減）**：儘管進行了多次試驗，但改善甚微
+
+      output_format: |
+        以 JSON 格式提供評估：
+
+        {
+          "should_stop": true / false,
+          "reason": "convergence" / "target_met" / "budget_exhausted" / "continue" / null,
+          "convergence_score": 0.0-1.0,  # 0=未收斂, 1=完全收斂
+          "progress_metrics": {
+            "pareto_improvement_rate": 近期改善率,
+            "target_satisfaction": 達標百分比 (0.0-1.0),
+            "budget_used": 已使用預算百分比 (0.0-1.0),
+            "trials_since_improvement": 自上次改善以來的試驗次數
+          },
+          "recommendation": "簡短建議（1-2 句話）"
+        }
+
+        僅輸出 JSON 物件（不要有其他文字）。
+
+      section_headers:
+        progress_summary: "# 進度摘要"
+        budget_status: "# 預算狀態"
+        targets_vs_best: "# 目標 vs 當前最佳"
+        your_task: "# 你的任務"
+
+      labels:
+        total_trials: "總試驗次數"
+        successful_trials: "成功試驗"
+        pareto_solutions: "Pareto 解"
+        satisfying_targets: "達標解"
+        trials_used: "已使用試驗"
+        progress: "進度"
+        evaluate_task: "評估優化是否應該繼續或停止。"
+        targets: "目標"
+        accuracy_min: "最低準確率"
+        gpu_peak_max: "最大 GPU 峰值"
+        latency_max: "最大延遲"
+        best_solution: "最佳解"
+        accuracy: "準確率"
+        gpu_peak: "GPU 峰值"
+        latency: "延遲"
+        satisfies_targets: "是否達標"
+        no_solutions: "無可比較的解。"
+
+    formatting:
+      methods: "方法"
+      and_more: "... 還有 {count} 個"
+      trial_format: "試驗 {num}"
+      config_format: "{method}-{bits}bit"
+      objectives_format: "準確率:{acc}, GPU:{gpu}, 延遲:{lat}"

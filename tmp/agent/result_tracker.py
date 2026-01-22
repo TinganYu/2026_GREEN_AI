@@ -112,15 +112,29 @@ class ResultTracker:
 
             # 推薦的配置
             'recommended_config': self._serialize_trial(optimization_results['recommended_config'])
-                                 if optimization_results['recommended_config'] else None
+                                 if optimization_results['recommended_config'] else None,
+
+            # Prompt 配置資訊（僅包含簡要資訊）
+            'prompt_info': {
+                'prompt_type': optimization_results.get('prompt_info', {}).get('prompt_type'),
+                'config_path': optimization_results.get('prompt_info', {}).get('config_path'),
+                'metadata': optimization_results.get('prompt_info', {}).get('metadata')
+            } if optimization_results.get('prompt_info') else None
         }
 
         # 保存完整結果
         results_file = os.path.join(self.output_dir, 'full_results.json')
         with open(results_file, 'w') as f:
-            json.dump(results, f, indent=2)
+            json.dump(results, f, indent=2, ensure_ascii=False)
 
         logger.info(f"完整結果已保存至：{results_file}")
+
+        # 保存 prompt 配置資訊（如果是 LLM multi-agent optimizer）
+        if optimization_results.get('prompt_info'):
+            prompt_file = os.path.join(self.output_dir, 'prompt_config_used.json')
+            with open(prompt_file, 'w', encoding='utf-8') as f:
+                json.dump(optimization_results['prompt_info'], f, indent=2, ensure_ascii=False)
+            logger.info(f"Prompt 配置已保存至：{prompt_file}")
 
         # 保存所有試驗（包含詳細信息）
         all_trials_file = os.path.join(self.output_dir, 'all_trials.json')
@@ -269,13 +283,17 @@ class ResultTracker:
         if trial is None:
             return None
 
-        # 提取關鍵資訊
+        # 提取關鍵資訊（處理失敗試驗沒有 objectives 的情況）
         serialized = {
-            'config': trial['config'],
-            'objectives': trial['objectives'],
-            'satisfies_constraints': trial.get('satisfies_constraints', True),
+            'config': trial.get('config', {}),
+            'objectives': trial.get('objectives', {
+                'accuracy_change': None,
+                'gpu_peak_change': None,
+                'latency_change': None
+            }),
+            'satisfies_constraints': trial.get('satisfies_constraints', False),
             'satisfies_targets': trial.get('satisfies_targets', False),
-            'violation_score': trial.get('violation_score', 0.0)
+            'violation_score': trial.get('violation_score', None)
         }
 
         # 添加狀態信息（來自 Optuna trial.user_attrs）

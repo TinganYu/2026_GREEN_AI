@@ -1,14 +1,160 @@
 """
 Prompt Templates for LLM Agents
 
-包含所有Agent的prompt templates和few-shot examples。
+支援從 YAML 配置檔載入多種類型的 prompt 模板。
 """
 
-from typing import Dict, List, Any
+import os
+import json
+import yaml
+import logging
+from typing import Dict, List, Any, Optional
+from pathlib import Path
+
+logger = logging.getLogger("PromptTemplates")
+
+
+class PromptConfigLoader:
+    """Prompt 配置載入器"""
+
+    _instance: Optional['PromptConfigLoader'] = None
+    _config: Optional[Dict] = None
+    _current_type: str = "en"
+    _config_path: Optional[str] = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    @classmethod
+    def load(cls, config_path: Optional[str] = None, prompt_type: Optional[str] = None) -> 'PromptConfigLoader':
+        """
+        載入 prompt 配置
+
+        Args:
+            config_path: YAML 配置檔路徑，預設為 tmp/config/prompt_config.yaml
+            prompt_type: 使用的 prompt 類型（如 'en', 'zh'），None 則使用預設
+
+        Returns:
+            PromptConfigLoader 實例
+        """
+        instance = cls()
+
+        # 決定配置檔路徑
+        if config_path is None:
+            # 尋找預設路徑
+            base_dir = Path(__file__).parent.parent.parent.parent  # tmp/
+            config_path = base_dir / "config" / "prompt_config.yaml"
+        else:
+            config_path = Path(config_path)
+
+        # 載入配置
+        if config_path.exists():
+            with open(config_path, 'r', encoding='utf-8') as f:
+                cls._config = yaml.safe_load(f)
+            cls._config_path = str(config_path)
+            logger.info(f"Loaded prompt config from: {config_path}")
+
+            # 設定類型
+            if prompt_type is not None:
+                cls._current_type = prompt_type
+            else:
+                cls._current_type = cls._config.get('default_type', 'en')
+
+            # 驗證類型是否支援
+            supported = cls._config.get('supported_types', ['en'])
+            if cls._current_type not in supported:
+                logger.warning(f"Prompt type '{cls._current_type}' not supported, using 'en'")
+                cls._current_type = 'en'
+
+            logger.info(f"Using prompt type: {cls._current_type}")
+        else:
+            logger.warning(f"Prompt config not found at {config_path}, using built-in defaults")
+            cls._config = None
+            cls._current_type = "en"
+
+        return instance
+
+    @classmethod
+    def get_prompts(cls, agent: str) -> Dict[str, Any]:
+        """
+        取得指定 agent 的 prompts
+
+        Args:
+            agent: agent 名稱 ('analyzer', 'planner', 'monitor')
+
+        Returns:
+            該 agent 的 prompt 配置字典
+        """
+        if cls._config is None:
+            return {}
+
+        prompts = cls._config.get('prompts', {})
+        type_prompts = prompts.get(cls._current_type, {})
+        return type_prompts.get(agent, {})
+
+    @classmethod
+    def get_formatting(cls) -> Dict[str, str]:
+        """取得格式化配置"""
+        if cls._config is None:
+            return {}
+
+        prompts = cls._config.get('prompts', {})
+        type_prompts = prompts.get(cls._current_type, {})
+        return type_prompts.get('formatting', {})
+
+    @classmethod
+    def get_current_type(cls) -> str:
+        """取得當前使用的 prompt 類型"""
+        return cls._current_type
+
+    @classmethod
+    def get_config_path(cls) -> Optional[str]:
+        """取得配置檔路徑"""
+        return cls._config_path
+
+    @classmethod
+    def get_metadata(cls) -> Dict[str, Any]:
+        """取得當前類型的 metadata"""
+        if cls._config is None:
+            return {"name": "Built-in English", "version": "1.0"}
+
+        prompts = cls._config.get('prompts', {})
+        type_prompts = prompts.get(cls._current_type, {})
+        return type_prompts.get('metadata', {})
+
+    @classmethod
+    def get_full_prompt_info(cls) -> Dict[str, Any]:
+        """
+        取得完整的 prompt 資訊，用於輸出到結果
+
+        Returns:
+            包含類型、路徑、metadata 和所有 prompts 的字典
+        """
+        return {
+            "prompt_type": cls._current_type,
+            "config_path": cls._config_path,
+            "metadata": cls.get_metadata(),
+            "supported_types": cls._config.get('supported_types', ['en']) if cls._config else ['en'],
+            "prompts": {
+                "analyzer": cls.get_prompts('analyzer'),
+                "planner": cls.get_prompts('planner'),
+                "monitor": cls.get_prompts('monitor'),
+                "formatting": cls.get_formatting()
+            }
+        }
 
 
 class PromptTemplates:
     """Prompt模板集合"""
+
+    @staticmethod
+    def _get_config() -> PromptConfigLoader:
+        """確保配置已載入"""
+        if PromptConfigLoader._config is None:
+            PromptConfigLoader.load()
+        return PromptConfigLoader()
 
     @staticmethod
     def get_analyzer_prompt(trials: List[Dict], pareto_frontier: List[Dict],
@@ -24,11 +170,60 @@ class PromptTemplates:
         Returns:
             完整的分析prompt
         """
+        PromptTemplates._get_config()
+        prompts = PromptConfigLoader.get_prompts('analyzer')
+        formatting = PromptConfigLoader.get_formatting()
+
         trials_summary = PromptTemplates._format_trials_summary(trials)
         pareto_summary = PromptTemplates._format_pareto_summary(pareto_frontier)
         space_summary = PromptTemplates._format_search_space(search_space)
 
-        prompt = f"""You are an expert analyzer for quantization optimization trials.
+        # 如果有配置，使用配置中的 prompts
+        if prompts:
+            labels = prompts.get('labels', {})
+            headers = prompts.get('section_headers', {})
+
+            total = len(trials)
+            successful = sum(1 for t in trials if t.get('success', False))
+            failed = total - successful
+
+            prompt = f"""{prompts.get('system_role', '')}
+
+{headers.get('your_task', '# Your Task')}
+{prompts.get('task_description', '')}
+
+{headers.get('historical_trials', '# Historical Trials Summary')}
+{labels.get('total_trials', 'Total trials')}: {total}
+{labels.get('successful_trials', 'Successful trials')}: {successful}
+{labels.get('failed_trials', 'Failed/Pruned trials')}: {failed}
+
+{trials_summary}
+
+{headers.get('pareto_frontier', '# Current Pareto Frontier')}
+{len(pareto_frontier)} {labels.get('non_dominated_solutions', 'non-dominated solutions found')}.
+{pareto_summary}
+
+{headers.get('search_space', '# Search Space')}
+{space_summary}
+
+{headers.get('analysis_req', '# Analysis Requirements')}
+{prompts.get('analysis_requirements', '')}
+
+{prompts.get('output_format', '')}"""
+        else:
+            # 使用內建預設 (向後相容)
+            prompt = PromptTemplates._get_default_analyzer_prompt(
+                trials, pareto_frontier, search_space,
+                trials_summary, pareto_summary, space_summary
+            )
+
+        return prompt
+
+    @staticmethod
+    def _get_default_analyzer_prompt(trials, pareto_frontier, search_space,
+                                     trials_summary, pareto_summary, space_summary) -> str:
+        """內建預設的 Analyzer prompt（向後相容）"""
+        return f"""You are an expert analyzer for quantization optimization trials.
 
 # Your Task
 Analyze the historical trials and identify patterns, failures, and unexplored regions.
@@ -83,7 +278,6 @@ Output ONLY a JSON object (no other text):
   "recommendations": [...]
 }}
 """
-        return prompt
 
     @staticmethod
     def get_planner_prompt(analysis: Dict, trial_num: int, budget: Dict,
@@ -101,9 +295,51 @@ Output ONLY a JSON object (no other text):
         Returns:
             完整的規劃prompt
         """
+        PromptTemplates._get_config()
+        prompts = PromptConfigLoader.get_prompts('planner')
+
         progress_pct = (trial_num / budget['max']) * 100 if budget['max'] > 0 else 0
 
-        prompt = f"""You are a strategic planner for quantization optimization.
+        if prompts:
+            labels = prompts.get('labels', {})
+            headers = prompts.get('section_headers', {})
+
+            prompt = f"""{prompts.get('system_role', '')}
+
+{headers.get('current_state', '# Current State')}
+{labels.get('trial', 'Trial')}: {trial_num} / {budget['max']}
+{labels.get('progress', 'Progress')}: {progress_pct:.1f}%
+{labels.get('budget_remaining', 'Budget remaining')}: {budget['max'] - trial_num} {labels.get('trials', 'trials')}
+
+{headers.get('analysis_from_analyzer', '# Analysis from AnalyzerAgent')}
+{PromptTemplates._format_json(analysis)}
+
+{headers.get('optimization_targets', '# Optimization Targets')}
+{PromptTemplates._format_json(targets)}
+
+{headers.get('pareto_frontier', '# Current Pareto Frontier')}
+{len(pareto)} {labels.get('solutions_on_frontier', 'solutions on frontier')}
+{PromptTemplates._format_pareto_summary(pareto)}
+
+{headers.get('your_task', '# Your Task')}
+{labels.get('decide_next_config', 'Decide the next trial configuration based on the analysis.')}
+
+{prompts.get('strategy_guide', '')}
+
+{prompts.get('progress_recommendation', '')}
+
+{prompts.get('output_format', '')}"""
+        else:
+            prompt = PromptTemplates._get_default_planner_prompt(
+                analysis, trial_num, budget, targets, pareto, progress_pct
+            )
+
+        return prompt
+
+    @staticmethod
+    def _get_default_planner_prompt(analysis, trial_num, budget, targets, pareto, progress_pct) -> str:
+        """內建預設的 Planner prompt（向後相容）"""
+        return f"""You are a strategic planner for quantization optimization.
 
 # Current State
 Trial: {trial_num} / {budget['max']}
@@ -169,7 +405,6 @@ Provide your decision in JSON format:
 
 Output ONLY the JSON object (no other text).
 """
-        return prompt
 
     @staticmethod
     def get_monitor_prompt(trials: List[Dict], pareto: List[Dict],
@@ -188,7 +423,51 @@ Output ONLY the JSON object (no other text).
         Returns:
             完整的監控prompt
         """
-        prompt = f"""You are monitoring the optimization progress.
+        PromptTemplates._get_config()
+        prompts = PromptConfigLoader.get_prompts('monitor')
+
+        if prompts:
+            labels = prompts.get('labels', {})
+            headers = prompts.get('section_headers', {})
+
+            total = len(trials)
+            successful = sum(1 for t in trials if t.get('success', False))
+            pareto_count = len(pareto)
+            satisfying = sum(1 for t in pareto if t.get('satisfies_targets', False))
+            progress_pct = (budget_status['used'] / budget_status['max'] * 100) if budget_status['max'] > 0 else 0
+
+            prompt = f"""{prompts.get('system_role', '')}
+
+{headers.get('progress_summary', '# Progress Summary')}
+{labels.get('total_trials', 'Total trials')}: {total}
+{labels.get('successful_trials', 'Successful trials')}: {successful}
+{labels.get('pareto_solutions', 'Pareto solutions')}: {pareto_count}
+{labels.get('satisfying_targets', 'Satisfying targets')}: {satisfying}
+
+{headers.get('budget_status', '# Budget Status')}
+{labels.get('trials_used', 'Trials used')}: {budget_status['used']} / {budget_status['max']}
+{labels.get('progress', 'Progress')}: {progress_pct:.1f}%
+
+{headers.get('targets_vs_best', '# Targets vs Current Best')}
+{PromptTemplates._format_target_comparison(targets, pareto, prompts)}
+
+{headers.get('your_task', '# Your Task')}
+{labels.get('evaluate_task', 'Evaluate whether optimization should continue or stop.')}
+
+{prompts.get('stopping_criteria', '')}
+
+{prompts.get('output_format', '')}"""
+        else:
+            prompt = PromptTemplates._get_default_monitor_prompt(
+                trials, pareto, budget_status, targets, pareto_history
+            )
+
+        return prompt
+
+    @staticmethod
+    def _get_default_monitor_prompt(trials, pareto, budget_status, targets, pareto_history) -> str:
+        """內建預設的 Monitor prompt（向後相容）"""
+        return f"""You are monitoring the optimization progress.
 
 # Progress Summary
 Total trials: {len(trials)}
@@ -230,21 +509,25 @@ Provide assessment in JSON:
 
 Output ONLY the JSON object (no other text).
 """
-        return prompt
 
     # ========== 輔助格式化方法 ==========
 
     @staticmethod
     def _format_trials_summary(trials: List[Dict]) -> str:
         """格式化試驗摘要"""
+        PromptTemplates._get_config()
+        prompts = PromptConfigLoader.get_prompts('analyzer')
+        formatting = PromptConfigLoader.get_formatting()
+        labels = prompts.get('labels', {}) if prompts else {}
+
         if not trials:
-            return "No trials yet."
+            return labels.get('no_trials', "No trials yet.")
 
         summary_lines = []
 
         # 最近5個試驗
         recent = trials[-5:]
-        summary_lines.append("Recent trials:")
+        summary_lines.append(f"{labels.get('recent_trials', 'Recent trials')}:")
         for i, t in enumerate(recent, 1):
             status = "✓" if t.get('success', False) else "✗"
             config = t.get('config', {})
@@ -255,8 +538,11 @@ Output ONLY the JSON object (no other text).
             gpu = objectives.get('gpu_peak_change', 0)
             lat = objectives.get('latency_change', 0)
 
+            trial_num = len(trials) - 5 + i
+            trial_label = formatting.get('trial_format', 'Trial {num}').format(num=trial_num)
+
             summary_lines.append(
-                f"  {status} Trial {len(trials) - 5 + i}: {method}-{bits}bit "
+                f"  {status} {trial_label}: {method}-{bits}bit "
                 f"(acc:{acc:+.2%}, gpu:{gpu:+.2%}, lat:{lat:+.2%})"
             )
 
@@ -265,8 +551,13 @@ Output ONLY the JSON object (no other text).
     @staticmethod
     def _format_pareto_summary(pareto: List[Dict]) -> str:
         """格式化Pareto前沿摘要"""
+        PromptTemplates._get_config()
+        prompts = PromptConfigLoader.get_prompts('analyzer')
+        formatting = PromptConfigLoader.get_formatting()
+        labels = prompts.get('labels', {}) if prompts else {}
+
         if not pareto:
-            return "No Pareto solutions yet."
+            return labels.get('no_pareto', "No Pareto solutions yet.")
 
         summary_lines = []
         for i, sol in enumerate(pareto[:5], 1):  # Top 5
@@ -285,15 +576,20 @@ Output ONLY the JSON object (no other text).
             )
 
         if len(pareto) > 5:
-            summary_lines.append(f"  ... and {len(pareto) - 5} more")
+            more_text = formatting.get('and_more', '... and {count} more').format(count=len(pareto) - 5)
+            summary_lines.append(f"  {more_text}")
 
         return "\n".join(summary_lines)
 
     @staticmethod
     def _format_search_space(space: Dict) -> str:
         """格式化搜索空間"""
+        PromptTemplates._get_config()
+        formatting = PromptConfigLoader.get_formatting()
+
         lines = []
-        lines.append(f"Methods: {space.get('methods', [])}")
+        methods_label = formatting.get('methods', 'Methods') if formatting else 'Methods'
+        lines.append(f"{methods_label}: {space.get('methods', [])}")
 
         for method in space.get('methods', []):
             if method in space:
@@ -306,37 +602,72 @@ Output ONLY the JSON object (no other text).
     @staticmethod
     def _format_json(obj: Any) -> str:
         """格式化JSON對象為字符串"""
-        import json
         return json.dumps(obj, indent=2, ensure_ascii=False)
 
     @staticmethod
-    def _format_target_comparison(targets: Dict, pareto: List[Dict]) -> str:
+    def _format_target_comparison(targets: Dict, pareto: List[Dict],
+                                   prompts: Optional[Dict] = None) -> str:
         """格式化目標與實際對比"""
+        labels = prompts.get('labels', {}) if prompts else {}
+
         if not pareto:
-            return "No solutions to compare."
+            return labels.get('no_solutions', "No solutions to compare.")
 
         lines = []
-        lines.append("Targets:")
-        lines.append(f"  accuracy_min: {targets.get('accuracy_min', 0):+.2%}")
-        lines.append(f"  gpu_peak_max: {targets.get('gpu_peak_max', 0):+.2%}")
-        lines.append(f"  latency_max: {targets.get('latency_max', 0):+.2%}")
+        lines.append(f"{labels.get('targets', 'Targets')}:")
+        lines.append(f"  {labels.get('accuracy_min', 'accuracy_min')}: {targets.get('accuracy_min', 0):+.2%}")
+        lines.append(f"  {labels.get('gpu_peak_max', 'gpu_peak_max')}: {targets.get('gpu_peak_max', 0):+.2%}")
+        lines.append(f"  {labels.get('latency_max', 'latency_max')}: {targets.get('latency_max', 0):+.2%}")
 
         # 找最佳解
         best = pareto[0] if pareto else None
         if best:
             obj = best.get('objectives', {})
-            lines.append("\nBest solution:")
-            lines.append(f"  accuracy: {obj.get('accuracy_change', 0):+.2%}")
-            lines.append(f"  gpu_peak: {obj.get('gpu_peak_change', 0):+.2%}")
-            lines.append(f"  latency: {obj.get('latency_change', 0):+.2%}")
-            lines.append(f"  Satisfies targets: {best.get('satisfies_targets', False)}")
+            lines.append(f"\n{labels.get('best_solution', 'Best solution')}:")
+            lines.append(f"  {labels.get('accuracy', 'accuracy')}: {obj.get('accuracy_change', 0):+.2%}")
+            lines.append(f"  {labels.get('gpu_peak', 'gpu_peak')}: {obj.get('gpu_peak_change', 0):+.2%}")
+            lines.append(f"  {labels.get('latency', 'latency')}: {obj.get('latency_change', 0):+.2%}")
+            lines.append(f"  {labels.get('satisfies_targets', 'Satisfies targets')}: {best.get('satisfies_targets', False)}")
 
         return "\n".join(lines)
 
 
+# ========== 便利函數 ==========
+
+def init_prompts(config_path: Optional[str] = None, prompt_type: Optional[str] = None):
+    """
+    初始化 prompt 配置
+
+    Args:
+        config_path: YAML 配置檔路徑
+        prompt_type: 使用的 prompt 類型
+    """
+    PromptConfigLoader.load(config_path, prompt_type)
+
+
+def get_prompt_info() -> Dict[str, Any]:
+    """
+    取得完整的 prompt 資訊，用於輸出到結果
+
+    Returns:
+        包含類型、路徑、metadata 和所有 prompts 的字典
+    """
+    return PromptConfigLoader.get_full_prompt_info()
+
+
 if __name__ == "__main__":
     # 測試prompt生成
-    templates = PromptTemplates()
+    import sys
+
+    # 測試載入配置
+    print("=" * 60)
+    print("Testing Prompt Config Loading")
+    print("=" * 60)
+
+    # 測試英文
+    init_prompts(prompt_type="en")
+    print(f"Current type: {PromptConfigLoader.get_current_type()}")
+    print(f"Metadata: {PromptConfigLoader.get_metadata()}")
 
     # 測試Analyzer prompt
     test_trials = [
@@ -348,13 +679,42 @@ if __name__ == "__main__":
         }
     ]
 
-    analyzer_prompt = templates.get_analyzer_prompt(
+    analyzer_prompt = PromptTemplates.get_analyzer_prompt(
         trials=test_trials,
         pareto_frontier=[],
         search_space={'methods': ['gptq', 'awq']}
     )
 
-    print("="*60)
-    print("ANALYZER PROMPT")
-    print("="*60)
-    print(analyzer_prompt[:500] + "...")
+    print("\n" + "=" * 60)
+    print("ANALYZER PROMPT (English)")
+    print("=" * 60)
+    print(analyzer_prompt[:800] + "...")
+
+    # 測試中文
+    print("\n" + "=" * 60)
+    print("Testing Chinese Prompts")
+    print("=" * 60)
+
+    init_prompts(prompt_type="zh")
+    print(f"Current type: {PromptConfigLoader.get_current_type()}")
+    print(f"Metadata: {PromptConfigLoader.get_metadata()}")
+
+    analyzer_prompt_zh = PromptTemplates.get_analyzer_prompt(
+        trials=test_trials,
+        pareto_frontier=[],
+        search_space={'methods': ['gptq', 'awq']}
+    )
+
+    print("\n" + "=" * 60)
+    print("ANALYZER PROMPT (中文)")
+    print("=" * 60)
+    print(analyzer_prompt_zh[:800] + "...")
+
+    # 測試取得完整資訊
+    print("\n" + "=" * 60)
+    print("Full Prompt Info")
+    print("=" * 60)
+    info = get_prompt_info()
+    print(f"Type: {info['prompt_type']}")
+    print(f"Config path: {info['config_path']}")
+    print(f"Supported types: {info['supported_types']}")
