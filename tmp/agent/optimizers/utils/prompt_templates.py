@@ -4,7 +4,6 @@ Prompt Templates for LLM Agents
 支援從 YAML 配置檔載入多種類型的 prompt 模板。
 """
 
-import os
 import json
 import yaml
 import logging
@@ -82,7 +81,7 @@ class PromptConfigLoader:
         取得指定 agent 的 prompts
 
         Args:
-            agent: agent 名稱 ('analyzer', 'planner', 'monitor')
+            agent: agent 名稱 ('analyzer', 'planner')
 
         Returns:
             該 agent 的 prompt 配置字典
@@ -125,24 +124,34 @@ class PromptConfigLoader:
         return type_prompts.get('metadata', {})
 
     @classmethod
-    def get_full_prompt_info(cls) -> Dict[str, Any]:
+    def get_full_prompt_info(cls, agent_mode: str = "separate") -> Dict[str, Any]:
         """
         取得完整的 prompt 資訊，用於輸出到結果
 
+        Args:
+            agent_mode: "separate" 或 "combined"，決定輸出哪些 agent prompts
+
         Returns:
-            包含類型、路徑、metadata 和所有 prompts 的字典
+            包含類型、路徑、metadata 和實際使用的 prompts 的字典
         """
+        if agent_mode == "combined":
+            agent_prompts = {
+                "strategist": cls.get_prompts('strategist'),
+            }
+        else:
+            agent_prompts = {
+                "analyzer": cls.get_prompts('analyzer'),
+                "planner": cls.get_prompts('planner'),
+            }
+        agent_prompts["formatting"] = cls.get_formatting()
+
         return {
+            "agent_mode": agent_mode,
             "prompt_type": cls._current_type,
             "config_path": cls._config_path,
             "metadata": cls.get_metadata(),
             "supported_types": cls._config.get('supported_types', ['en']) if cls._config else ['en'],
-            "prompts": {
-                "analyzer": cls.get_prompts('analyzer'),
-                "planner": cls.get_prompts('planner'),
-                "monitor": cls.get_prompts('monitor'),
-                "formatting": cls.get_formatting()
-            }
+            "prompts": agent_prompts
         }
 
 
@@ -172,7 +181,6 @@ class PromptTemplates:
         """
         PromptTemplates._get_config()
         prompts = PromptConfigLoader.get_prompts('analyzer')
-        formatting = PromptConfigLoader.get_formatting()
 
         trials_summary = PromptTemplates._format_trials_summary(trials)
         pareto_summary = PromptTemplates._format_pareto_summary(pareto_frontier)
@@ -213,20 +221,20 @@ class PromptTemplates:
         else:
             # 使用內建預設 (向後相容)
             prompt = PromptTemplates._get_default_analyzer_prompt(
-                trials, pareto_frontier, search_space,
+                trials, pareto_frontier,
                 trials_summary, pareto_summary, space_summary
             )
 
         return prompt
 
     @staticmethod
-    def _get_default_analyzer_prompt(trials, pareto_frontier, search_space,
+    def _get_default_analyzer_prompt(trials, pareto_frontier,
                                      trials_summary, pareto_summary, space_summary) -> str:
         """內建預設的 Analyzer prompt（向後相容）"""
-        return f"""You are an expert analyzer for quantization optimization trials.
+        return f"""You are an expert analyzer for quantization optimization trials. Think step by step.
 
 # Your Task
-Analyze the historical trials and identify patterns, failures, and unexplored regions.
+Analyze the historical trials systematically to understand what works and what doesn't.
 
 # Historical Trials Summary
 Total trials: {len(trials)}
@@ -242,46 +250,64 @@ Failed/Pruned trials: {len(trials) - sum(1 for t in trials if t.get('success', F
 # Search Space
 {space_summary}
 
-# Analysis Requirements
-Provide a comprehensive analysis in JSON format with these fields:
+# Chain of Thought Analysis Process
 
-1. **failure_patterns**: List of failure patterns identified
-   - pattern: Description of the pattern
-   - confidence: 0.0-1.0 (how confident you are)
-   - affected_configs: List of similar configs that might fail
+## Step 1: Method Performance Analysis
+For each quantization method (gptq/awq/bnb), analyze:
+- How many trials? How many succeeded/failed?
+- Average accuracy_change, gpu_peak_change, latency_change
+- Which method performs best for each objective?
 
-2. **unexplored_regions**: Promising parameter combinations not yet tried
-   - method: quantization method
-   - params: specific parameter values
-   - exploration_score: 0.0-1.0 (how valuable to explore)
-   - rationale: why this region is promising
+## Step 2: Failure Pattern Analysis
+Look at failed trials and identify:
+- What parameter combinations caused failures?
+- Are there common patterns (e.g., bits=2 always fails)?
 
-3. **parameter_sensitivity**: Which parameters have the most impact
-   - parameter: parameter name
-   - impact_score: 0.0-1.0 (higher = more important)
-   - observation: what you observed
+## Step 3: Success Pattern Analysis
+Look at successful trials (especially Pareto solutions):
+- What parameter combinations work well?
+- What are the trade-offs?
 
-4. **pareto_quality**: Quality assessment of Pareto frontier
-   - diversity: 0.0-1.0 (spread across objectives)
-   - coverage: 0.0-1.0 (% of theoretical frontier covered)
-   - improvement_rate: trend of new solutions added
+## Step 4: Parameter Sensitivity Analysis
+- bits: How does 2/3/4/8 bit affect results?
+- group_size: Does smaller/larger help?
+- Other notable observations?
 
-5. **recommendations**: List of strategic recommendations
-   - recommendation: brief actionable advice
+## Step 5: Strategic Recommendations
+Based on the above, what should be tried next?
 
-Output ONLY a JSON object (no other text):
+# Output Format
+Output a JSON object with your complete analysis:
 {{
-  "failure_patterns": [...],
-  "unexplored_regions": [...],
-  "parameter_sensitivity": {{...}},
-  "pareto_quality": {{...}},
-  "recommendations": [...]
+  "method_analysis": {{
+    "gptq": {{"trials": N, "success_rate": X, "avg_accuracy": Y, "avg_gpu": Z, "observations": "..."}},
+    "awq": {{"trials": N, "success_rate": X, "avg_accuracy": Y, "avg_gpu": Z, "observations": "..."}},
+    "bnb": {{"trials": N, "success_rate": X, "avg_accuracy": Y, "avg_gpu": Z, "observations": "..."}}
+  }},
+  "failure_patterns": [
+    {{"pattern": "description", "affected_params": {{}}, "suggestion": "avoid/adjust"}}
+  ],
+  "success_patterns": [
+    {{"pattern": "description", "winning_params": {{}}, "trade_off": "..."}}
+  ],
+  "parameter_insights": {{
+    "bits": "observation",
+    "group_size": "observation",
+    "other": "observation"
+  }},
+  "unexplored_regions": [
+    {{"method": "...", "params": {{}}, "rationale": "why promising"}}
+  ],
+  "recommendations": ["advice 1", "advice 2"]
 }}
+
+Output ONLY the JSON object (no other text).
 """
 
     @staticmethod
     def get_planner_prompt(analysis: Dict, trial_num: int, budget: Dict,
-                          targets: Dict, pareto: List[Dict]) -> str:
+                          targets: Dict, pareto: List[Dict], search_space: Dict,
+                          trials: List[Dict] = None) -> str:
         """
         PlannerAgent的prompt模板
 
@@ -291,6 +317,8 @@ Output ONLY a JSON object (no other text):
             budget: 預算狀態 (used, max)
             targets: 優化目標
             pareto: Pareto前沿
+            search_space: 搜索空間定義
+            trials: 已嘗試的配置列表（用於避免重複）
 
         Returns:
             完整的規劃prompt
@@ -299,6 +327,9 @@ Output ONLY a JSON object (no other text):
         prompts = PromptConfigLoader.get_prompts('planner')
 
         progress_pct = (trial_num / budget['max']) * 100 if budget['max'] > 0 else 0
+        space_summary = PromptTemplates._format_search_space(search_space)
+        tried_configs = PromptTemplates._format_tried_configs(trials or [])
+        targets_with_gap = PromptTemplates._format_targets_with_gap(targets, pareto)
 
         if prompts:
             labels = prompts.get('labels', {})
@@ -311,11 +342,17 @@ Output ONLY a JSON object (no other text):
 {labels.get('progress', 'Progress')}: {progress_pct:.1f}%
 {labels.get('budget_remaining', 'Budget remaining')}: {budget['max'] - trial_num} {labels.get('trials', 'trials')}
 
+{headers.get('search_space', '# Search Space (Available Parameters)')}
+{space_summary}
+
+{headers.get('already_tried', '# Already Tried Configurations (DO NOT REPEAT)')}
+{tried_configs}
+
+{headers.get('optimization_targets', '# Optimization Targets (Your Goals)')}
+{targets_with_gap}
+
 {headers.get('analysis_from_analyzer', '# Analysis from AnalyzerAgent')}
 {PromptTemplates._format_json(analysis)}
-
-{headers.get('optimization_targets', '# Optimization Targets')}
-{PromptTemplates._format_json(targets)}
 
 {headers.get('pareto_frontier', '# Current Pareto Frontier')}
 {len(pareto)} {labels.get('solutions_on_frontier', 'solutions on frontier')}
@@ -324,33 +361,43 @@ Output ONLY a JSON object (no other text):
 {headers.get('your_task', '# Your Task')}
 {labels.get('decide_next_config', 'Decide the next trial configuration based on the analysis.')}
 
-{prompts.get('strategy_guide', '')}
+{prompts.get('decision_process', '')}
 
-{prompts.get('progress_recommendation', '')}
+{prompts.get('strategy_guide', '')}
 
 {prompts.get('output_format', '')}"""
         else:
             prompt = PromptTemplates._get_default_planner_prompt(
-                analysis, trial_num, budget, targets, pareto, progress_pct
+                analysis, trial_num, budget, targets, pareto, search_space, trials, progress_pct
             )
 
         return prompt
 
     @staticmethod
-    def _get_default_planner_prompt(analysis, trial_num, budget, targets, pareto, progress_pct) -> str:
+    def _get_default_planner_prompt(analysis, trial_num, budget, targets, pareto, search_space, trials, progress_pct) -> str:
         """內建預設的 Planner prompt（向後相容）"""
-        return f"""You are a strategic planner for quantization optimization.
+        space_summary = PromptTemplates._format_search_space(search_space)
+        tried_configs = PromptTemplates._format_tried_configs(trials or [])
+        targets_with_gap = PromptTemplates._format_targets_with_gap(targets, pareto)
+
+        return f"""You are a strategic planner for quantization optimization. Think step by step before making decisions.
 
 # Current State
 Trial: {trial_num} / {budget['max']}
 Progress: {progress_pct:.1f}%
 Budget remaining: {budget['max'] - trial_num} trials
 
+# Search Space (Available Parameters)
+{space_summary}
+
+# Already Tried Configurations (DO NOT REPEAT)
+{tried_configs}
+
+# Optimization Targets (Your Goals)
+{targets_with_gap}
+
 # Analysis from AnalyzerAgent
 {PromptTemplates._format_json(analysis)}
-
-# Optimization Targets
-{PromptTemplates._format_json(targets)}
 
 # Current Pareto Frontier
 {len(pareto)} solutions on frontier
@@ -358,153 +405,252 @@ Budget remaining: {budget['max'] - trial_num} trials
 
 # Your Task
 Decide the next trial configuration based on the analysis.
+IMPORTANT:
+- Only use parameter values from the Search Space above!
+- DO NOT repeat any configuration from "Already Tried" list!
 
-# Strategy Selection Guide
-- **EXPLORATION** (early phase or when stuck):
-  - Try unexplored parameter regions
-  - Test diverse configurations
-  - Focus on coverage
+# Decision Process (Chain of Thought)
+Follow these steps:
 
-- **EXPLOITATION** (mid-late phase with good patterns):
-  - Refine promising configurations
-  - Small perturbations around successful trials
-  - Focus on improvement
+## Step 1: Review Analyzer's Findings
+- What methods performed best/worst?
+- What failure patterns should we avoid?
+- What unexplored regions are promising?
 
-- **BALANCED**:
-  - Mix of both strategies
-  - Good default choice
+## Step 2: Consider User Targets
+- Check the "Optimization Targets" section above
+- Which gaps need to be closed?
 
-# Recommended Strategy Based on Progress
-- < 20% progress: Prefer EXPLORATION (70%)
-- 20-70% progress: BALANCED (50/50)
-- > 70% progress: Prefer EXPLOITATION (80%)
+## Step 3: Avoid Tried Configurations
+- Check the "Already Tried" list above
+- Ensure your suggestion is NEW
+
+## Step 4: Choose Strategy
+- Early phase (< 20%): Explore diverse methods/params
+- Mid phase (20-70%): Balance exploration and exploitation
+- Late phase (> 70%): Focus on refining best configs
+
+## Step 5: Design Next Config
+- Pick method based on analysis insights
+- Choose parameters that are promising but not yet tried
+
+# Strategy Reference
+- **EXPLORATION**: Try new methods/params, prioritize unexplored_regions
+- **EXPLOITATION**: Refine successful configs, small parameter adjustments
+- **BALANCED**: Mix of both
 
 # Output Requirements
 Provide your decision in JSON format:
 
 {{
+  "thinking": {{
+    "analyzer_insights": "What I learned from the analysis (1-2 sentences)",
+    "target_gap": "How far are we from meeting targets? (1 sentence)",
+    "avoid_repeating": "Which tried configs am I avoiding? (list methods/bits)",
+    "chosen_strategy_reason": "Why I chose this strategy (1 sentence)"
+  }},
   "strategy": "exploration" / "exploitation" / "balanced",
   "next_config": {{
     "method": "gptq" / "awq" / "bnb",
     "bits": ...,
     "group_size": ...,
-    ... (all relevant parameters)
+    ... (all relevant parameters from Search Space)
   }},
-  "rationale": "Explain why you chose this config (2-3 sentences)",
-  "confidence": 0.0-1.0,
-  "expected_objectives": {{
-    "accuracy_change": expected value,
-    "gpu_peak_change": expected value,
-    "latency_change": expected value
-  }},
-  "alternative_configs": [
-    {{...}},  # Backup option 1
-    {{...}}   # Backup option 2
-  ]
+  "rationale": "Final explanation of this config choice (2-3 sentences)",
+  "confidence": 0.0-1.0
 }}
 
 Output ONLY the JSON object (no other text).
 """
 
+    # ========== Strategist Agent (Combined Mode) ==========
+
     @staticmethod
-    def get_monitor_prompt(trials: List[Dict], pareto: List[Dict],
-                          budget_status: Dict, targets: Dict,
-                          pareto_history: List[Dict]) -> str:
+    def get_strategist_prompt(trials: List[Dict], pareto_frontier: List[Dict],
+                              search_space: Dict, trial_num: int, budget: Dict,
+                              targets: Dict) -> str:
         """
-        MonitorAgent的prompt模板
+        StrategistAgent 的合併 prompt（分析 + 決策在一起）
 
         Args:
-            trials: 所有試驗
-            pareto: Pareto前沿
-            budget_status: 預算狀態
+            trials: 歷史試驗列表
+            pareto_frontier: 當前 Pareto 前沿
+            search_space: 搜索空間定義
+            trial_num: 當前試驗編號
+            budget: 預算狀態 (used, max)
             targets: 優化目標
-            pareto_history: Pareto前沿歷史
 
         Returns:
-            完整的監控prompt
+            完整的策略師 prompt
         """
         PromptTemplates._get_config()
-        prompts = PromptConfigLoader.get_prompts('monitor')
+        prompts = PromptConfigLoader.get_prompts('strategist')
+
+        progress_pct = (trial_num / budget['max']) * 100 if budget['max'] > 0 else 0
+        trials_summary = PromptTemplates._format_trials_summary(trials)
+        pareto_summary = PromptTemplates._format_pareto_summary(pareto_frontier)
+        space_summary = PromptTemplates._format_search_space(search_space)
+        tried_configs = PromptTemplates._format_tried_configs(trials)
+        targets_with_gap = PromptTemplates._format_targets_with_gap(targets, pareto_frontier)
 
         if prompts:
             labels = prompts.get('labels', {})
             headers = prompts.get('section_headers', {})
 
-            total = len(trials)
-            successful = sum(1 for t in trials if t.get('success', False))
-            pareto_count = len(pareto)
-            satisfying = sum(1 for t in pareto if t.get('satisfies_targets', False))
-            progress_pct = (budget_status['used'] / budget_status['max'] * 100) if budget_status['max'] > 0 else 0
-
             prompt = f"""{prompts.get('system_role', '')}
 
-{headers.get('progress_summary', '# Progress Summary')}
-{labels.get('total_trials', 'Total trials')}: {total}
-{labels.get('successful_trials', 'Successful trials')}: {successful}
-{labels.get('pareto_solutions', 'Pareto solutions')}: {pareto_count}
-{labels.get('satisfying_targets', 'Satisfying targets')}: {satisfying}
-
-{headers.get('budget_status', '# Budget Status')}
-{labels.get('trials_used', 'Trials used')}: {budget_status['used']} / {budget_status['max']}
+{headers.get('current_state', '# Current State')}
+{labels.get('trial', 'Trial')}: {trial_num} / {budget['max']}
 {labels.get('progress', 'Progress')}: {progress_pct:.1f}%
+{labels.get('budget_remaining', 'Budget remaining')}: {budget['max'] - trial_num} {labels.get('trials', 'trials')}
 
-{headers.get('targets_vs_best', '# Targets vs Current Best')}
-{PromptTemplates._format_target_comparison(targets, pareto, prompts)}
+{headers.get('search_space', '# Search Space (Available Parameters)')}
+{space_summary}
+
+{headers.get('already_tried', '# Already Tried Configurations (DO NOT REPEAT)')}
+{tried_configs}
+
+{headers.get('optimization_targets', '# Optimization Targets (Your Goals)')}
+{targets_with_gap}
+
+{headers.get('historical_trials', '# Historical Trials Summary')}
+{trials_summary}
+
+{headers.get('pareto_frontier', '# Current Pareto Frontier')}
+{len(pareto_frontier)} {labels.get('solutions_on_frontier', 'solutions on frontier')}
+{pareto_summary}
 
 {headers.get('your_task', '# Your Task')}
-{labels.get('evaluate_task', 'Evaluate whether optimization should continue or stop.')}
+{prompts.get('task_description', '')}
 
-{prompts.get('stopping_criteria', '')}
+{prompts.get('analysis_steps', '')}
+
+{prompts.get('decision_steps', '')}
 
 {prompts.get('output_format', '')}"""
         else:
-            prompt = PromptTemplates._get_default_monitor_prompt(
-                trials, pareto, budget_status, targets, pareto_history
+            prompt = PromptTemplates._get_default_strategist_prompt(
+                trials, pareto_frontier, search_space, trial_num, budget, targets, progress_pct,
+                trials_summary, pareto_summary, space_summary, tried_configs, targets_with_gap
             )
 
         return prompt
 
     @staticmethod
-    def _get_default_monitor_prompt(trials, pareto, budget_status, targets, pareto_history) -> str:
-        """內建預設的 Monitor prompt（向後相容）"""
-        return f"""You are monitoring the optimization progress.
+    def _get_default_strategist_prompt(trials, pareto_frontier, search_space, trial_num, budget, targets,
+                                       progress_pct, trials_summary, pareto_summary, space_summary,
+                                       tried_configs, targets_with_gap) -> str:
+        """內建預設的 Strategist prompt"""
+        return f"""You are an expert strategist for quantization optimization.
+Your job is to ANALYZE the historical trials AND DECIDE the next configuration in ONE response.
+Think step by step.
 
-# Progress Summary
-Total trials: {len(trials)}
-Successful trials: {sum(1 for t in trials if t.get('success', False))}
-Pareto solutions: {len(pareto)}
-Satisfying targets: {sum(1 for t in pareto if t.get('satisfies_targets', False))}
+# Current State
+Trial: {trial_num} / {budget['max']}
+Progress: {progress_pct:.1f}%
+Budget remaining: {budget['max'] - trial_num} trials
 
-# Budget Status
-Trials used: {budget_status['used']} / {budget_status['max']}
-Progress: {(budget_status['used'] / budget_status['max'] * 100):.1f}%
+# Search Space (Available Parameters)
+{space_summary}
 
-# Targets vs Current Best
-{PromptTemplates._format_target_comparison(targets, pareto)}
+# Already Tried Configurations (DO NOT REPEAT)
+{tried_configs}
+
+# Optimization Targets (Your Goals)
+{targets_with_gap}
+
+# Historical Trials Summary
+{trials_summary}
+
+# Current Pareto Frontier
+{len(pareto_frontier)} solutions on frontier
+{pareto_summary}
 
 # Your Task
-Evaluate whether optimization should continue or stop.
+Complete BOTH analysis and decision in one response.
 
-# Stopping Criteria to Consider
-1. **CONVERGENCE**: Pareto front hasn't improved in last N trials
-2. **TARGET_MET**: Found solutions satisfying all user targets
-3. **BUDGET**: Budget almost exhausted (>95%)
-4. **DIMINISHING_RETURNS**: Little improvement despite many trials
+## PART 1: ANALYSIS (Chain of Thought)
 
-# Output Requirements
-Provide assessment in JSON:
+### Step 1: Method Performance
+For each method (gptq/awq/bnb):
+- How many trials? Success rate?
+- Average accuracy_change and gpu_peak_change?
+- Which method is best for each objective?
+
+### Step 2: Failure Patterns
+- What parameter combinations caused failures?
+- Any common patterns to avoid?
+
+### Step 3: Success Patterns
+- What works well? (especially Pareto solutions)
+- Trade-offs observed?
+
+### Step 4: Parameter Insights
+- How does bits (2/3/4/8) affect results?
+- How does group_size affect results?
+
+## PART 2: DECISION (Based on Analysis)
+
+### Step 5: Consider Targets
+- Check the gap from targets above
+- Which objective needs most improvement?
+
+### Step 6: Avoid Repetition
+- Check "Already Tried" list
+- Ensure new config is DIFFERENT
+
+### Step 7: Choose Strategy
+- Early (< 20%): EXPLORATION
+- Mid (20-70%): BALANCED
+- Late (> 70%): EXPLOITATION
+
+### Step 8: Design Next Config
+- Pick method based on insights
+- Choose promising but untried params
+
+# Output Format
+Provide your complete analysis and decision in ONE JSON object:
 
 {{
-  "should_stop": true / false,
-  "reason": "convergence" / "target_met" / "budget_exhausted" / "continue" / null,
-  "convergence_score": 0.0-1.0,  # 0=no convergence, 1=fully converged
-  "progress_metrics": {{
-    "pareto_improvement_rate": recent improvement rate,
-    "target_satisfaction": % of targets met (0.0-1.0),
-    "budget_used": % of budget consumed (0.0-1.0),
-    "trials_since_improvement": count
+  "analysis": {{
+    "method_analysis": {{
+      "gptq": {{"trials": N, "success_rate": X, "avg_accuracy": Y, "avg_gpu": Z, "observations": "..."}},
+      "awq": {{"trials": N, "success_rate": X, "avg_accuracy": Y, "avg_gpu": Z, "observations": "..."}},
+      "bnb": {{"trials": N, "success_rate": X, "avg_accuracy": Y, "avg_gpu": Z, "observations": "..."}}
+    }},
+    "failure_patterns": [
+      {{"pattern": "description", "affected_params": {{}}, "suggestion": "avoid/adjust"}}
+    ],
+    "success_patterns": [
+      {{"pattern": "description", "winning_params": {{}}, "trade_off": "..."}}
+    ],
+    "parameter_insights": {{
+      "bits": "observation",
+      "group_size": "observation",
+      "other": "observation"
+    }},
+    "unexplored_regions": [
+      {{"method": "...", "params": {{}}, "rationale": "why promising"}}
+    ],
+    "recommendations": ["advice 1", "advice 2"]
   }},
-  "recommendation": "Brief recommendation (1-2 sentences)"
+  "decision": {{
+    "thinking": {{
+      "analyzer_insights": "Key finding from analysis (1-2 sentences)",
+      "target_gap": "Gap from targets (1 sentence)",
+      "avoid_repeating": "Configs I'm avoiding (list)",
+      "chosen_strategy_reason": "Why this strategy (1 sentence)"
+    }},
+    "strategy": "exploration" / "exploitation" / "balanced",
+    "next_config": {{
+      "method": "gptq" / "awq" / "bnb",
+      "bits": ...,
+      "group_size": ...,
+      ... (all params from Search Space)
+    }},
+    "rationale": "Final explanation (2-3 sentences)",
+    "confidence": 0.0-1.0
+  }}
 }}
 
 Output ONLY the JSON object (no other text).
@@ -605,29 +751,100 @@ Output ONLY the JSON object (no other text).
         return json.dumps(obj, indent=2, ensure_ascii=False)
 
     @staticmethod
-    def _format_target_comparison(targets: Dict, pareto: List[Dict],
-                                   prompts: Optional[Dict] = None) -> str:
-        """格式化目標與實際對比"""
-        labels = prompts.get('labels', {}) if prompts else {}
+    def _format_tried_configs(trials: List[Dict]) -> str:
+        """
+        格式化已嘗試的配置列表（用於避免重複）
 
-        if not pareto:
-            return labels.get('no_solutions', "No solutions to compare.")
+        Args:
+            trials: 所有試驗列表
+
+        Returns:
+            格式化的已嘗試配置摘要
+        """
+        if not trials:
+            return "No configurations tried yet. You have full freedom to explore!"
+
+        # 按方法分組
+        by_method = {}
+        for t in trials:
+            config = t.get('config', {})
+            method = config.get('method', 'unknown')
+            bits = config.get('bits', '?')
+            group_size = config.get('group_size', '?')
+            success = t.get('success', False)
+
+            if method not in by_method:
+                by_method[method] = []
+
+            status = "✓" if success else "✗"
+            by_method[method].append(f"{bits}bit/gs{group_size} {status}")
 
         lines = []
-        lines.append(f"{labels.get('targets', 'Targets')}:")
-        lines.append(f"  {labels.get('accuracy_min', 'accuracy_min')}: {targets.get('accuracy_min', 0):+.2%}")
-        lines.append(f"  {labels.get('gpu_peak_max', 'gpu_peak_max')}: {targets.get('gpu_peak_max', 0):+.2%}")
-        lines.append(f"  {labels.get('latency_max', 'latency_max')}: {targets.get('latency_max', 0):+.2%}")
+        for method, configs in by_method.items():
+            # 只顯示前 5 個，避免 prompt 過長
+            display_configs = configs[:5]
+            if len(configs) > 5:
+                display_configs.append(f"... and {len(configs) - 5} more")
+            lines.append(f"{method.upper()}: {', '.join(display_configs)}")
 
-        # 找最佳解
-        best = pareto[0] if pareto else None
-        if best:
+        lines.append("")
+        lines.append("⚠️ DO NOT suggest any of the above configurations!")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_targets_with_gap(targets: Dict, pareto: List[Dict]) -> str:
+        """
+        格式化目標並顯示與當前最佳解的差距
+
+        Args:
+            targets: 用戶目標
+            pareto: Pareto 前沿
+
+        Returns:
+            目標和差距的格式化字串
+        """
+        lines = []
+
+        # 顯示目標
+        acc_min = targets.get('accuracy_min', 0)
+        gpu_max = targets.get('gpu_peak_max', 0)
+        lat_max = targets.get('latency_max', 0)
+
+        lines.append("Your targets:")
+        lines.append(f"  - accuracy_change ≥ {acc_min:+.1%} (higher is better)")
+        lines.append(f"  - gpu_peak_change ≤ {gpu_max:+.1%} (lower is better)")
+        lines.append(f"  - latency_change ≤ {lat_max:+.1%} (lower is better)")
+
+        # 如果有 Pareto 解，顯示最佳解與目標的差距
+        if pareto:
+            best = pareto[0]
             obj = best.get('objectives', {})
-            lines.append(f"\n{labels.get('best_solution', 'Best solution')}:")
-            lines.append(f"  {labels.get('accuracy', 'accuracy')}: {obj.get('accuracy_change', 0):+.2%}")
-            lines.append(f"  {labels.get('gpu_peak', 'gpu_peak')}: {obj.get('gpu_peak_change', 0):+.2%}")
-            lines.append(f"  {labels.get('latency', 'latency')}: {obj.get('latency_change', 0):+.2%}")
-            lines.append(f"  {labels.get('satisfies_targets', 'Satisfies targets')}: {best.get('satisfies_targets', False)}")
+            best_acc = obj.get('accuracy_change', 0)
+            best_gpu = obj.get('gpu_peak_change', 0)
+            best_lat = obj.get('latency_change', 0)
+
+            lines.append("")
+            lines.append("Current best vs targets:")
+
+            # 計算差距
+            acc_status = "✓ MET" if best_acc >= acc_min else f"✗ GAP: {acc_min - best_acc:+.1%}"
+            gpu_status = "✓ MET" if best_gpu <= gpu_max else f"✗ GAP: {best_gpu - gpu_max:+.1%}"
+            lat_status = "✓ MET" if best_lat <= lat_max else f"✗ GAP: {best_lat - lat_max:+.1%}"
+
+            lines.append(f"  - accuracy: {best_acc:+.2%} {acc_status}")
+            lines.append(f"  - gpu_peak: {best_gpu:+.2%} {gpu_status}")
+            lines.append(f"  - latency: {best_lat:+.2%} {lat_status}")
+
+            if best.get('satisfies_targets', False):
+                lines.append("")
+                lines.append("✓ All targets satisfied! Focus on finding more diverse solutions.")
+            else:
+                lines.append("")
+                lines.append("✗ Targets not yet met. Prioritize configs that can close the gap.")
+        else:
+            lines.append("")
+            lines.append("No solutions yet. Start exploring!")
 
         return "\n".join(lines)
 
@@ -645,19 +862,21 @@ def init_prompts(config_path: Optional[str] = None, prompt_type: Optional[str] =
     PromptConfigLoader.load(config_path, prompt_type)
 
 
-def get_prompt_info() -> Dict[str, Any]:
+def get_prompt_info(agent_mode: str = "separate") -> Dict[str, Any]:
     """
     取得完整的 prompt 資訊，用於輸出到結果
 
+    Args:
+        agent_mode: "separate" 或 "combined"
+
     Returns:
-        包含類型、路徑、metadata 和所有 prompts 的字典
+        包含類型、路徑、metadata 和實際使用的 prompts 的字典
     """
-    return PromptConfigLoader.get_full_prompt_info()
+    return PromptConfigLoader.get_full_prompt_info(agent_mode)
 
 
 if __name__ == "__main__":
     # 測試prompt生成
-    import sys
 
     # 測試載入配置
     print("=" * 60)

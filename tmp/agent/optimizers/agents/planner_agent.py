@@ -39,7 +39,8 @@ class PlannerAgent(BaseAgent):
                 'trial_num': int,       # 當前試驗編號
                 'budget': Dict,         # {'used': int, 'max': int}
                 'targets': Dict,        # 優化目標
-                'pareto': List[Dict]    # Pareto前沿
+                'pareto': List[Dict],   # Pareto前沿
+                'trials': List[Dict]    # 已嘗試的配置（用於避免重複）
             }
             context: 可選上下文
 
@@ -51,12 +52,13 @@ class PlannerAgent(BaseAgent):
         budget = input_data.get('budget', {'used': 1, 'max': 100})
         targets = input_data.get('targets', {})
         pareto = input_data.get('pareto', [])
+        trials = input_data.get('trials', [])
 
         logger.info(f"Planning trial {trial_num}/{budget['max']}")
 
-        # 構建prompt
+        # 構建prompt（傳入 search_space 和 trials 讓 LLM 知道可用參數和避免重複）
         prompt = PromptTemplates.get_planner_prompt(
-            analysis, trial_num, budget, targets, pareto
+            analysis, trial_num, budget, targets, pareto, self.search_space, trials
         )
 
         # 調用LLM獲取決策
@@ -150,13 +152,7 @@ class PlannerAgent(BaseAgent):
             'strategy': strategy,
             'next_config': next_config,
             'rationale': rationale,
-            'confidence': 0.5,
-            'expected_objectives': {
-                'accuracy_change': 0.0,
-                'gpu_peak_change': -0.3,
-                'latency_change': 0.1
-            },
-            'alternative_configs': []
+            'confidence': 0.5
         }
 
     def _generate_config_for_method(self, method: str) -> Dict[str, Any]:

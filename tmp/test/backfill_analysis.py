@@ -246,8 +246,69 @@ def generate_analysis_files(exp_dir: Path, data: dict, regen_pareto: bool = Fals
         print(f"  ⚠ 跳過分析（Pareto 前沿為空）")
 
 
+def fix_summary(exp_dir: Path, data: dict) -> None:
+    """
+    修復 summary.json，在 optimization 區段添加 satisfying_and_pareto
+
+    Args:
+        exp_dir: 實驗目錄路徑
+        data: 從 load_experiment_data 返回的資料
+    """
+    all_trials = data['all_trials']
+    pareto_frontier = data['pareto_frontier']
+
+    # 重新計算所有滿足目標的解（從所有試驗中篩選）
+    satisfying_trials = []
+    for i, t in enumerate(all_trials):
+        if not t.get('satisfies_targets', False):
+            continue
+        status = t.get('status')
+        if status and status != 'completed':
+            continue
+        if not t.get('objectives'):
+            continue
+        satisfying_trials.append(t)
+
+    # 建立 Pareto 前沿的 config 集合
+    pareto_configs = set()
+    for p in pareto_frontier:
+        config_key = str(p.get('config', {}))
+        pareto_configs.add(config_key)
+
+    # 計算滿足目標且為前沿的解數量
+    n_satisfying_and_pareto = sum(
+        1 for s in satisfying_trials
+        if str(s.get('config', {})) in pareto_configs
+    )
+
+    # 讀取現有的 summary.json
+    summary_file = exp_dir / 'summary.json'
+    if not summary_file.exists():
+        print(f"  ⚠ 找不到 summary.json，跳過")
+        return
+
+    with open(summary_file, 'r', encoding='utf-8') as f:
+        summary = json.load(f)
+
+    # 更新 optimization 區段
+    if 'optimization' in summary:
+        opt = summary['optimization']
+        opt['pareto_solutions'] = len(pareto_frontier)
+        opt['satisfying_solutions'] = len(satisfying_trials)
+        opt['satisfying_and_pareto'] = n_satisfying_and_pareto
+
+    # 保存更新後的 summary
+    with open(summary_file, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+
+    print(f"  ✓ 修復：summary.json")
+    print(f"    - pareto_solutions: {len(pareto_frontier)}")
+    print(f"    - satisfying_solutions: {len(satisfying_trials)}")
+    print(f"    - satisfying_and_pareto: {n_satisfying_and_pareto}")
+
+
 def backfill_experiments(base_dirs: list, force: bool = False, single_dir: str = None,
-                         regen_pareto: bool = False) -> None:
+                         regen_pareto: bool = False, fix_summary_only: bool = False) -> None:
     """
     補全所有實驗的分析檔案
 
@@ -256,6 +317,7 @@ def backfill_experiments(base_dirs: list, force: bool = False, single_dir: str =
         force: 是否強制重新生成（覆蓋已有檔案）
         single_dir: 如果指定，只處理這一個目錄
         regen_pareto: 是否重新生成 pareto_frontier.json
+        fix_summary_only: 是否只修復 summary.json
     """
     total_experiments = 0
     processed_experiments = 0
@@ -291,6 +353,20 @@ def backfill_experiments(base_dirs: list, force: bool = False, single_dir: str =
     for exp_dir in sorted(exp_dirs_to_process):
         print(f"\n處理實驗：{exp_dir.name}")
         print("-" * 80)
+
+        # 如果只修復 summary
+        if fix_summary_only:
+            try:
+                data = load_experiment_data(exp_dir)
+                fix_summary(exp_dir, data)
+                processed_experiments += 1
+                print(f"  ✅ Summary 修復完成")
+            except Exception as e:
+                print(f"  ❌ 修復 summary 失敗：{e}")
+                import traceback
+                traceback.print_exc()
+                failed_experiments += 1
+            continue
 
         # 檢查是否需要跳過
         scored_file = exp_dir / 'satisfying_trials_scored.json'
@@ -354,6 +430,9 @@ def main():
   # 重新生成 pareto_frontier.json（添加 trial_id）
   python tmp/test/backfill_analysis.py --regen-pareto --force
 
+  # 只修復 summary.json（添加三類解統計）
+  python tmp/test/backfill_analysis.py --fix-summary
+
   # 處理 LLM 優化實驗
   python tmp/test/backfill_analysis.py --dirs results/llm_optimization
         """
@@ -384,6 +463,12 @@ def main():
         help='重新計算並輸出 pareto_frontier.json（添加 trial_id）'
     )
 
+    parser.add_argument(
+        '--fix-summary',
+        action='store_true',
+        help='只修復 summary.json，添加三類解統計（所有前沿解、所有滿足目標解、滿足目標且為前沿的解）'
+    )
+
     args = parser.parse_args()
 
     # 列印配置
@@ -398,10 +483,11 @@ def main():
 
     print(f"強制重新生成：{'是' if args.force else '否'}")
     print(f"重新生成 Pareto 前沿：{'是' if args.regen_pareto else '否'}")
+    print(f"只修復 Summary：{'是' if args.fix_summary else '否'}")
 
     # 執行補全
     backfill_experiments(args.dirs, force=args.force, single_dir=args.single,
-                         regen_pareto=args.regen_pareto)
+                         regen_pareto=args.regen_pareto, fix_summary_only=args.fix_summary)
 
 
 if __name__ == '__main__':

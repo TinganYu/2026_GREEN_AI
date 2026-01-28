@@ -11,7 +11,7 @@ from typing import Dict, List, Any
 from datetime import datetime
 
 from .base_optimizer import BaseOptimizer
-from .agents import AnalyzerAgent, PlannerAgent, MonitorAgent
+from .agents import AnalyzerAgent, PlannerAgent, MonitorAgent, StrategistAgent
 from .utils import LLMClient, ConversationLogger
 from .utils.prompt_templates import init_prompts, get_prompt_info
 
@@ -42,12 +42,16 @@ class LLMMultiAgentOptimizer(BaseOptimizer):
 
         self.exp_dir = exp_dir
 
+        # Agent 模式: "separate" (Analyzer + Planner) 或 "combined" (Strategist)
+        self.agent_mode = self.llm_config.get('agent_mode', 'separate')
+        logger.info(f"Agent mode: {self.agent_mode}")
+
         # 初始化 Prompt 配置
         prompt_config = self.llm_config.get('prompt', {})
         prompt_config_file = prompt_config.get('config_file')
         prompt_type = prompt_config.get('type')
         init_prompts(prompt_config_file, prompt_type)
-        self.prompt_info = get_prompt_info()
+        self.prompt_info = get_prompt_info(self.agent_mode)
         logger.info(f"Prompt type: {self.prompt_info['prompt_type']}")
         logger.info(f"Prompt config: {self.prompt_info.get('config_path', 'built-in')}")
 
@@ -57,22 +61,32 @@ class LLMMultiAgentOptimizer(BaseOptimizer):
         # 初始化Agents
         agent_temps = self.llm_config.get('agent_temperatures', {})
 
-        self.analyzer = AnalyzerAgent(
-            self.llm_client,
-            temperature=agent_temps.get('analyzer', 0.3)
-        )
+        if self.agent_mode == 'combined':
+            # Combined 模式：使用 StrategistAgent
+            self.strategist = StrategistAgent(
+                self.llm_client,
+                search_space=self.search_space,
+                temperature=agent_temps.get('strategist', 0.5)
+            )
+            self.analyzer = None
+            self.planner = None
+        else:
+            # Separate 模式：使用 Analyzer + Planner
+            self.analyzer = AnalyzerAgent(
+                self.llm_client,
+                temperature=agent_temps.get('analyzer', 0.3)
+            )
+            self.planner = PlannerAgent(
+                self.llm_client,
+                search_space=self.search_space,
+                temperature=agent_temps.get('planner', 0.7)
+            )
+            self.strategist = None
 
-        self.planner = PlannerAgent(
-            self.llm_client,
-            search_space=self.search_space,
-            temperature=agent_temps.get('planner', 0.7)
-        )
-
+        # MonitorAgent 使用純規則判斷，不需要 LLM
         self.monitor = MonitorAgent(
-            self.llm_client,
             convergence_window=self.stopping_config['convergence'].get('window', 5),
-            convergence_threshold=self.stopping_config['convergence'].get('threshold', 0.02),
-            temperature=agent_temps.get('monitor', 0.4)
+            convergence_threshold=self.stopping_config['convergence'].get('threshold', 0.02)
         )
 
         # 初始化對話記錄器
@@ -139,19 +153,33 @@ class LLMMultiAgentOptimizer(BaseOptimizer):
                 self.conversation_logger.log_trial_start(trial_count)
 
             try:
-                # ===== STEP 1: ANALYZE =====
-                logger.info("[1/4] Analyzer: Analyzing trial history...")
+                if self.agent_mode == 'combined':
+                    # ===== COMBINED MODE: STRATEGIST =====
+                    logger.info("[1/4] Strategist: Analyzing and planning...")
 
-                analysis = self._run_analyzer(trial_count)
+                    strategist_result = self._run_strategist(trial_count, max_trials)
+                    analysis = strategist_result.get('analysis', {})
+                    decision = strategist_result.get('decision', {})
 
-                # ===== STEP 2: PLAN =====
-                logger.info("[2/4] Planner: Deciding next configuration...")
+                    logger.info(f"  Strategy: {decision.get('strategy', 'unknown')}")
+                    logger.info(f"  Method: {decision.get('next_config', {}).get('method')}")
+                    logger.info(f"  Rationale: {decision.get('rationale', 'N/A')}")
 
-                decision = self._run_planner(analysis, trial_count, max_trials)
+                else:
+                    # ===== SEPARATE MODE: ANALYZER + PLANNER =====
+                    # ===== STEP 1: ANALYZE =====
+                    logger.info("[1/4] Analyzer: Analyzing trial history...")
 
-                logger.info(f"  Strategy: {decision['strategy']}")
-                logger.info(f"  Method: {decision['next_config'].get('method')}")
-                logger.info(f"  Rationale: {decision['rationale']}")
+                    analysis = self._run_analyzer(trial_count)
+
+                    # ===== STEP 2: PLAN =====
+                    logger.info("[2/4] Planner: Deciding next configuration...")
+
+                    decision = self._run_planner(analysis, trial_count, max_trials)
+
+                    logger.info(f"  Strategy: {decision['strategy']}")
+                    logger.info(f"  Method: {decision['next_config'].get('method')}")
+                    logger.info(f"  Rationale: {decision['rationale']}")
 
                 # ===== STEP 3: VALIDATE =====
                 logger.info("[3/4] Validating configuration...")
@@ -237,12 +265,18 @@ class LLMMultiAgentOptimizer(BaseOptimizer):
         logger.info("="*60)
 
         pareto_frontier = self.get_pareto_frontier(self.trials)
-        satisfying_solutions = [t for t in pareto_frontier if t.get('satisfies_targets', False)]
+        # 獲取所有滿足目標的解（從所有試驗中篩選，而非僅從 Pareto 前沿）
+        satisfying_solutions = [t for t in self.trials if t.get('satisfies_targets', False)]
         recommended = self.recommend_config(pareto_frontier, satisfying_solutions)
+
+        # 計算滿足目標且為 Pareto 前沿的解
+        pareto_configs = {str(p.get('config', {})) for p in pareto_frontier}
+        satisfying_and_pareto = [t for t in satisfying_solutions if str(t.get('config', {})) in pareto_configs]
 
         logger.info(f"Total trials: {len(self.trials)}")
         logger.info(f"Pareto solutions: {len(pareto_frontier)}")
-        logger.info(f"Satisfying solutions: {len(satisfying_solutions)}")
+        logger.info(f"Satisfying solutions (all): {len(satisfying_solutions)}")
+        logger.info(f"Satisfying and Pareto: {len(satisfying_and_pareto)}")
 
         if recommended:
             logger.info("\nRecommended configuration:")
@@ -265,6 +299,7 @@ class LLMMultiAgentOptimizer(BaseOptimizer):
 
         return {
             'optimizer_type': 'llm_multiagent',
+            'agent_mode': self.agent_mode,
             'all_trials': self.trials,
             'pareto_frontier': pareto_frontier,
             'satisfying_solutions': satisfying_solutions,
@@ -336,7 +371,8 @@ class LLMMultiAgentOptimizer(BaseOptimizer):
                 'trial_num': trial_num,
                 'budget': {'used': trial_num, 'max': max_trials},
                 'targets': self.targets_config,
-                'pareto': self.get_pareto_frontier(self.trials)
+                'pareto': self.get_pareto_frontier(self.trials),
+                'trials': self.trials  # 傳入已嘗試的配置以避免重複
             })
 
             # 記錄消息
@@ -361,50 +397,60 @@ class LLMMultiAgentOptimizer(BaseOptimizer):
                 {'used': trial_num, 'max': max_trials}
             )
 
-    def _run_monitor(self, trial_num: int, max_trials: int) -> Dict[str, Any]:
-        """運行MonitorAgent"""
+    def _run_strategist(self, trial_num: int, max_trials: int) -> Dict[str, Any]:
+        """運行StrategistAgent（Combined模式）"""
         if self.fallback_mode:
-            # Fallback: 使用規則評估
-            return self.monitor._rule_based_stopping(
+            # Fallback: 使用 strategist 的 fallback 方法
+            return self.strategist._fallback_strategist(
                 self.trials,
                 self.get_pareto_frontier(self.trials),
-                {'used': trial_num, 'max': max_trials},
-                self.targets_config,
-                self.pareto_history
+                trial_num,
+                {'used': trial_num, 'max': max_trials}
             )
 
         try:
-            assessment = self.monitor.process({
-                'trials': self.trials,
-                'pareto_frontier': self.get_pareto_frontier(self.trials),
-                'budget_status': {'used': trial_num, 'max': max_trials},
-                'targets': self.targets_config,
-                'pareto_history': self.pareto_history
-            })
+            result = self.strategist.process(
+                input_data={
+                    'trials': self.trials,
+                    'pareto_frontier': self.get_pareto_frontier(self.trials),
+                    'trial_num': trial_num,
+                    'budget': {'used': trial_num, 'max': max_trials},
+                    'targets': self.targets_config
+                }
+            )
 
             # 記錄消息
-            if self.conversation_logger and self.monitor.history:
-                msg = self.monitor.history[-1]
+            if self.conversation_logger and self.strategist.history:
+                msg = self.strategist.history[-1]
                 self.conversation_logger.log_message(msg.to_dict())
 
-            return assessment
+            return result
 
         except Exception as e:
-            logger.error(f"Monitor failed: {e}")
+            logger.error(f"Strategist failed: {e}")
             self.llm_failure_count += 1
 
             # 如果策略是 'stop'，直接拋出異常
             if self.fallback_strategy == 'stop':
-                raise RuntimeError(f"MonitorAgent failed and fallback strategy is 'stop': {e}")
+                raise RuntimeError(f"StrategistAgent failed and fallback strategy is 'stop': {e}")
 
             # 否則使用 fallback
-            return self.monitor._rule_based_stopping(
+            return self.strategist._fallback_strategist(
                 self.trials,
                 self.get_pareto_frontier(self.trials),
-                {'used': trial_num, 'max': max_trials},
-                self.targets_config,
-                self.pareto_history
+                trial_num,
+                {'used': trial_num, 'max': max_trials}
             )
+
+    def _run_monitor(self, trial_num: int, max_trials: int) -> Dict[str, Any]:
+        """運行MonitorAgent（純規則版本）"""
+        return self.monitor.process({
+            'trials': self.trials,
+            'pareto_frontier': self.get_pareto_frontier(self.trials),
+            'budget_status': {'used': trial_num, 'max': max_trials},
+            'targets': self.targets_config,
+            'pareto_history': self.pareto_history
+        })
 
     def _validate_config(self, config: Dict[str, Any]) -> tuple:
         """

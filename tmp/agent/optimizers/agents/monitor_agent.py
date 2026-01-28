@@ -1,14 +1,11 @@
 """
 Monitor Agent
 
-監控優化進度並判斷停止條件。
+監控優化進度並判斷停止條件（純規則版本，不使用 LLM）。
 """
 
 import logging
 from typing import Dict, Any, List, Optional
-
-from .base_agent import BaseAgent
-from ..utils.prompt_templates import PromptTemplates
 
 logger = logging.getLogger("MonitorAgent")
 logger.setLevel(logging.INFO)
@@ -21,18 +18,24 @@ logger.addHandler(handler)
 logger.propagate = False
 
 
-class MonitorAgent(BaseAgent):
-    """進度監控Agent（簡化版）"""
+class MonitorAgent:
+    """進度監控Agent（純規則版本）"""
 
-    def __init__(self, llm_client, convergence_window: int = 5,
-                 convergence_threshold: float = 0.02, temperature: float = 0.4):
-        super().__init__(llm_client, "MonitorAgent", temperature)
+    def __init__(self, convergence_window: int = 5, convergence_threshold: float = 0.02):
+        """
+        初始化 MonitorAgent
+
+        Args:
+            convergence_window: 收斂檢測窗口大小
+            convergence_threshold: 收斂閾值（未使用，保留以保持 API 相容）
+        """
         self.convergence_window = convergence_window
         self.convergence_threshold = convergence_threshold
+        self.history = []  # 保留以保持 API 相容
 
     def process(self, input_data: Dict[str, Any], context: Optional[Dict] = None) -> Dict[str, Any]:
         """
-        監控優化進度並評估停止條件
+        監控優化進度並評估停止條件（純規則版本）
 
         Args:
             input_data: {
@@ -42,7 +45,7 @@ class MonitorAgent(BaseAgent):
                 'targets': Dict,                # 優化目標
                 'pareto_history': List[Dict]    # Pareto歷史
             }
-            context: 可選上下文
+            context: 可選上下文（未使用）
 
         Returns:
             監控評估結果
@@ -55,74 +58,17 @@ class MonitorAgent(BaseAgent):
 
         logger.info(f"Monitoring progress: {len(trials)} trials, {len(pareto)} Pareto solutions")
 
-        # 首先進行規則檢查
-        rule_based_stop = self._rule_based_stopping(
+        # 使用規則判斷停止條件
+        result = self._rule_based_stopping(
             trials, pareto, budget_status, targets, pareto_history
         )
 
-        if rule_based_stop['should_stop']:
-            logger.info(f"Rule-based stop triggered: {rule_based_stop['reason']}")
+        if result['should_stop']:
+            logger.info(f"Stop triggered: {result['reason']}")
+        else:
+            logger.info("Continue optimization")
 
-            # 創建並保存消息（規則停止）
-            msg = self.create_message(
-                to_agent="Orchestrator",
-                message_type="progress_assessment",
-                content={
-                    'input_summary': {
-                        'trials_count': len(trials),
-                        'pareto_count': len(pareto),
-                        'budget_used': budget_status['used'],
-                        'budget_max': budget_status['max']
-                    },
-                    'assessment': rule_based_stop,
-                    'rule_based': True
-                },
-                trial_context=budget_status['used']
-            )
-            self.history.append(msg)
-
-            return rule_based_stop
-
-        # 如果規則未觸發停止，使用LLM進行評估
-        prompt = PromptTemplates.get_monitor_prompt(
-            trials, pareto, budget_status, targets, pareto_history
-        )
-
-        try:
-            assessment = self._call_llm_structured(prompt)
-
-            # 驗證輸出
-            required_fields = ['should_stop', 'progress_metrics']
-
-            if not self._validate_output(assessment, required_fields):
-                logger.warning("LLM output incomplete, using rule-based assessment")
-                return rule_based_stop
-
-            logger.info(f"LLM assessment: should_stop={assessment['should_stop']}, "
-                       f"reason={assessment.get('reason', 'continue')}")
-
-            # 創建並保存消息
-            msg = self.create_message(
-                to_agent="Orchestrator",
-                message_type="progress_assessment",
-                content={
-                    'input_summary': {
-                        'trials_count': len(trials),
-                        'pareto_count': len(pareto),
-                        'budget_used': budget_status['used'],
-                        'budget_max': budget_status['max']
-                    },
-                    'assessment': assessment
-                },
-                trial_context=budget_status['used']
-            )
-            self.history.append(msg)
-
-            return assessment
-
-        except Exception as e:
-            logger.error(f"Monitoring failed: {e}")
-            return rule_based_stop
+        return result
 
     def _rule_based_stopping(self, trials: List[Dict], pareto: List[Dict],
                             budget_status: Dict, targets: Dict,

@@ -188,6 +188,7 @@ class ResultTracker:
             'pareto_solutions': len(optimization_results['pareto_frontier']),
             'solutions': [
                 {
+                    'trial_id': t.get('trial_id'),
                     'config': t['config'],
                     'objectives': t['objectives'],
                     'satisfies_targets': t['satisfies_targets'],
@@ -333,6 +334,22 @@ class ResultTracker:
 
     def _create_summary(self, results: Dict[str, Any]) -> Dict[str, Any]:
         """建立簡潔摘要"""
+        # 取得三類解
+        pareto_frontier = results.get('pareto_frontier', [])
+        satisfying_solutions = results.get('satisfying_solutions', [])
+
+        # 建立 Pareto 前沿的 config 集合（用於判斷是否為 Pareto 解）
+        pareto_configs = set()
+        for p in pareto_frontier:
+            config_key = str(p.get('config', {}))
+            pareto_configs.add(config_key)
+
+        # 計算滿足目標且為前沿的解
+        n_satisfying_and_pareto = sum(
+            1 for s in satisfying_solutions
+            if str(s.get('config', {})) in pareto_configs
+        )
+
         summary = {
             'experiment_name': results['experiment_name'],
             'timestamp': results['timestamp'],
@@ -348,7 +365,8 @@ class ResultTracker:
                 'optimizer': results['optimization_summary']['optimizer_type'],
                 'total_trials': results['optimization_summary']['n_total_trials'],
                 'pareto_solutions': results['optimization_summary']['n_pareto_solutions'],
-                'satisfying_solutions': results['optimization_summary']['n_satisfying_solutions']
+                'satisfying_solutions': results['optimization_summary']['n_satisfying_solutions'],
+                'satisfying_and_pareto': n_satisfying_and_pareto
             },
 
             'targets': results['targets'],

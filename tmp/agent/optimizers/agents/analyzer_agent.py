@@ -55,12 +55,9 @@ class AnalyzerAgent(BaseAgent):
         try:
             analysis = self._call_llm_structured(prompt)
 
-            # 驗證輸出
+            # 驗證輸出（只檢查實際使用的欄位）
             required_fields = [
-                'failure_patterns',
                 'unexplored_regions',
-                'parameter_sensitivity',
-                'pareto_quality',
                 'recommendations'
             ]
 
@@ -118,62 +115,76 @@ class AnalyzerAgent(BaseAgent):
         """
         Fallback分析（基於規則）
 
-        當LLM失敗時使用簡單的統計分析。
+        當LLM失敗時使用簡單的統計分析，輸出 CoT 格式。
         """
-        successful = [t for t in trials if t.get('success', False)]
-        failed = [t for t in trials if not t.get('success', False)]
-
-        # 簡單的失敗模式識別
-        failure_patterns = []
-        if len(failed) > 0:
-            # 統計失敗配置的共同點
-            methods_failed = {}
-            for f in failed:
-                method = f.get('config', {}).get('method', 'unknown')
-                methods_failed[method] = methods_failed.get(method, 0) + 1
-
-            for method, count in methods_failed.items():
-                if count >= 2:
-                    failure_patterns.append({
-                        'pattern': f"{method} method has {count} failures",
-                        'confidence': min(count / len(failed), 1.0),
-                        'affected_configs': []
-                    })
-
-        # 識別未探索區域（簡單方法：檢查哪些方法很少嘗試）
-        unexplored_regions = []
         methods = search_space.get('methods', [])
+
+        # Step 1: Method Performance Analysis
+        method_analysis = {}
+        for method in methods:
+            method_trials = [t for t in trials if t.get('config', {}).get('method') == method]
+            successful = [t for t in method_trials if t.get('success', False)]
+
+            if method_trials:
+                avg_acc = sum(t.get('objectives', {}).get('accuracy_change', 0) for t in successful) / max(len(successful), 1)
+                avg_gpu = sum(t.get('objectives', {}).get('gpu_peak_change', 0) for t in successful) / max(len(successful), 1)
+            else:
+                avg_acc, avg_gpu = 0, 0
+
+            method_analysis[method] = {
+                'trials': len(method_trials),
+                'success_rate': len(successful) / max(len(method_trials), 1),
+                'avg_accuracy': round(avg_acc, 4),
+                'avg_gpu': round(avg_gpu, 4),
+                'observations': f"Tried {len(method_trials)} times" if method_trials else "Not tried yet"
+            }
+
+        # Step 2: Failure Patterns
+        failed_trials = [t for t in trials if not t.get('success', False)]
+        failure_patterns = []
+        if failed_trials:
+            failure_patterns.append({
+                'pattern': f"{len(failed_trials)} trials failed",
+                'affected_params': {},
+                'suggestion': "Check error logs for details"
+            })
+
+        # Step 3: Success Patterns
+        success_patterns = []
+        if pareto:
+            best = pareto[0]
+            success_patterns.append({
+                'pattern': "Best Pareto solution",
+                'winning_params': best.get('config', {}),
+                'trade_off': "Current best balance"
+            })
+
+        # Step 4: Parameter Insights
+        parameter_insights = {
+            'bits': "Lower bits = more compression but less accuracy",
+            'group_size': "Smaller group_size = more granular quantization",
+            'other': "Need more trials for detailed analysis"
+        }
+
+        # Step 5: Unexplored Regions
+        unexplored_regions = []
         method_counts = {}
         for t in trials:
             method = t.get('config', {}).get('method', 'unknown')
             method_counts[method] = method_counts.get(method, 0) + 1
 
         for method in methods:
-            if method_counts.get(method, 0) < 3:  # 少於3次嘗試
+            if method_counts.get(method, 0) < 3:
                 unexplored_regions.append({
                     'method': method,
                     'params': {},
-                    'exploration_score': 0.7,
                     'rationale': f"{method} has been tried less than 3 times"
                 })
 
-        # 參數敏感度（簡化：基於成功率）
-        parameter_sensitivity = {
-            'bits': 0.8,  # 假設bits很重要
-            'group_size': 0.6,
-            'method': 0.9
-        }
-
-        # Pareto質量評估
-        pareto_quality = {
-            'diversity': min(len(pareto) / 5.0, 1.0),  # 至少5個解為滿分
-            'coverage': len(pareto) / max(len(successful), 1),
-            'improvement_rate': len(pareto) / max(len(trials), 1)
-        }
-
-        # 推薦
+        # Recommendations
         recommendations = []
-        if len(successful) < 5:
+        successful_count = sum(1 for t in trials if t.get('success', False))
+        if successful_count < 5:
             recommendations.append("Continue exploration to gather more successful trials")
         if len(pareto) < 3:
             recommendations.append("Focus on finding diverse solutions for Pareto frontier")
@@ -181,9 +192,10 @@ class AnalyzerAgent(BaseAgent):
             recommendations.append(f"Explore {region['method']} method more")
 
         return {
+            'method_analysis': method_analysis,
             'failure_patterns': failure_patterns,
+            'success_patterns': success_patterns,
+            'parameter_insights': parameter_insights,
             'unexplored_regions': unexplored_regions,
-            'parameter_sensitivity': parameter_sensitivity,
-            'pareto_quality': pareto_quality,
             'recommendations': recommendations
         }

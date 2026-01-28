@@ -98,9 +98,14 @@ class OptunaMultiObjectiveOptimizer(BaseOptimizer):
         # 使用成功的試驗計算 Pareto 前沿（而非全部）
         pareto_frontier = self.get_pareto_frontier(successful_trials)
 
-        # 獲取滿足目標的解決方案
-        satisfying_solutions = [t for t in pareto_frontier if t['satisfies_targets']]
+        # 獲取所有滿足目標的解決方案（從所有成功試驗中篩選，而非僅從 Pareto 前沿）
+        satisfying_solutions = [t for t in successful_trials if t['satisfies_targets']]
         logger.info(f"滿足目標的解決方案（符合所有目標）：{len(satisfying_solutions)} 個")
+
+        # 計算滿足目標且為 Pareto 前沿的解
+        pareto_configs = {str(p.get('config', {})) for p in pareto_frontier}
+        satisfying_and_pareto = [t for t in satisfying_solutions if str(t.get('config', {})) in pareto_configs]
+        logger.info(f"滿足目標且為 Pareto 前沿的解：{len(satisfying_and_pareto)} 個")
 
         # 推薦最佳配置
         recommended = self.recommend_config(pareto_frontier, satisfying_solutions)

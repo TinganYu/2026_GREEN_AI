@@ -77,7 +77,7 @@ optimizer:
   llm_agent:
     # LLM Provider
     provider: "openai"  # or "anthropic"
-    model: "gpt-5-mini"
+    model: "gpt-4o"
     api_key_env: "OPENAI_API_KEY"
 
     # 生成參數
@@ -90,15 +90,20 @@ optimizer:
       type: "zh"  # Prompt 類型（參見 prompt_config.yaml 中的 supported_types）
                   # 可選: "en" (English), "zh" (繁體中文), 或自定義類型
 
-    # Agent特定溫度
+    # Agent 模式選擇
+    # - "separate": 使用 Analyzer → Planner（2 次 LLM 調用，更詳細的分析）
+    # - "combined": 使用 StrategistAgent（1 次 LLM 調用，省錢省時間）
+    agent_mode: "separate"
+
+    # Agent特定溫度（MonitorAgent 使用純規則，不需要 LLM）
     agent_temperatures:
-      analyzer: 0.3    # 低溫保證一致性
-      planner: 0.7     # 中高溫增加創造力
-      monitor: 0.4     # 低中溫保證穩定評估
+      analyzer: 0.3    # 低溫保證一致性（separate 模式）
+      planner: 0.7     # 中高溫增加創造力（separate 模式）
+      strategist: 0.5  # 中溫平衡分析和創造（combined 模式）
 
     # Trial限制
-    max_trials: 15     # Phase 1: 小規模測試
-    min_trials: 10      # 最少試驗數
+    max_trials: 25     # Phase 1: 小規模測試
+    min_trials: 20      # 最少試驗數
 
   # === 停止條件（簡化） ===
   stopping:

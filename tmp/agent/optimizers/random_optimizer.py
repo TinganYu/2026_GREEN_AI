@@ -56,8 +56,13 @@ class RandomOptimizer(BaseOptimizer):
         # 取得 Pareto 前緣（Pareto frontier）
         pareto_frontier = self.get_pareto_frontier(all_trials)
 
-        # 取得滿足目標條件的解（satisfying solutions）
-        satisfying_solutions = [t for t in pareto_frontier if t['satisfies_targets']]
+        # 取得所有滿足目標條件的解（從所有試驗中篩選，而非僅從 Pareto 前沿）
+        satisfying_solutions = [t for t in all_trials if t['satisfies_targets']]
+
+        # 計算滿足目標且為 Pareto 前沿的解
+        pareto_configs = {str(p.get('config', {})) for p in pareto_frontier}
+        satisfying_and_pareto = [t for t in satisfying_solutions if str(t.get('config', {})) in pareto_configs]
+        logger.info(f"Satisfying and Pareto solutions: {len(satisfying_and_pareto)}")
 
         # 推薦配置
         recommended = self.recommend_config(pareto_frontier, satisfying_solutions)
