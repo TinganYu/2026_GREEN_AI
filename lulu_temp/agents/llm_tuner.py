@@ -9,6 +9,7 @@ from eval.base_evaluator import BaseEvaluator
 import importlib
 import os
 import gc
+from pathlib import Path
 os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
 import torch
 from typing import Dict, List, Optional
@@ -16,7 +17,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, ValidationError 
 from openai import OpenAI
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(Path(__file__).parent.parent / ".env") #改到最外層
 
 logger = logging.getLogger(__name__)
 
@@ -165,158 +166,6 @@ class LLMAdaptiveTuner:
                 log_level="ERROR",
                 save_to_file=True
             )
-        
-        # logger.info(f"LLM Adaptive Tuner initialized for {task}")
-    
-#     def _create_optimization_prompt(self, iteration: int) -> str:
-#         """
-#         Create prompt for LLM to suggest next hyperparameters.
-#         Based on OPRO-style prompting.
-#         """
-#         # Task description
-#         if self.task == "gsm8k":
-#             task_desc = "mathematical reasoning (GSM8K dataset)"
-#             metric_name = "accuracy"
-#         else:
-#             task_desc = "text summarization (MultiNews dataset)"
-#             metric_name = "ROUGE-L F1"
-        
-#         # Build prompt with history
-#         prompt = f"""You are an expert hyperparameter optimization assistant. Your goal is to find the best KV cache compression settings for {task_desc}.
-# ## Baseline Performance (No Compression)
-# {metric_name}: {self.baseline_score:.4f}
-        
-# ## Objective
-# Maximize: {self.accuracy_weight:.0%} {metric_name} + {self.co2_weight:.0%} CO2 efficiency
-
-# ## Available Hyperparameters
-
-# 1. **compression_method** (categorical):
-#    - snapkv: Attention-based, keeps recent + important tokens
-#    - observed_attention: More accurate attention-based (slower)
-#    - knorm: Magnitude-based, fastest
-#    - expected_attention: Expected attention patterns
-
-# 2. **compression_ratio** (float, 0.2-0.9):
-#    - Fraction of tokens to KEEP (higher = more tokens, better quality, higher cost)
-#    - Typically 0.3-0.7 works best
-
-
-
-# """
-# #        3. **window_size** (int, method-specific):
-# #    - For snapkv: {"16-64 (GSM8K)" if self.task == "gsm8k" else "32-128 (MultiNews)"}
-# #    - For streaming_llm: {"256-1024" if self.task == "gsm8k" else "512-2048"}
-# #    - Recent tokens to always keep
-
-# # 4. **kernel_size** (int, snapkv only):
-# #    - {3, 5, 7, 9, 11}
-# #    - Pooling kernel for important token selection 
-#         if self.task == "multinews":
-#             prompt += """5. **max_input_tokens** (int, 2048-6144):
-#    - Truncate long documents
-#    - Lower = faster but may lose info
-
-# """
-        
-#         # Add trial history
-#         if self.trial_history:
-#             prompt += f"""## Previous Trials (Iteration {iteration}/{self.max_iterations})
-
-# """
-#             # Show last 5 trials
-#             recent_trials = self.trial_history[-5:]
-#             for i, trial in enumerate(recent_trials, 1):
-#                 params = trial['params']
-#                 score = trial['score']
-#                 acc = trial['accuracy']
-#                 co2 = trial['co2_kg'] * 1000  # to grams
-                
-#                 prompt += f"""Trial {trial['iteration']}:
-#   Config: method={params['compression_method']}, ratio={params['compression_ratio']:.2f}"""
-                
-#                 # if 'window_size' in params:
-#                 #     prompt += f", window={params['window_size']}"
-#                 # if 'kernel_size' in params:
-#                 #     prompt += f", kernel={params['kernel_size']}"
-                
-#                 prompt += f"""
-#   Results: {metric_name}={acc:.4f}, CO2={co2:.2f}g, Score={score:.4f}
-#   Analysis: """
-                
-#                 # # Add analysis
-#                 # if score > 0.7:
-#                 #     prompt += "✓ Good configuration"
-#                 # elif score > 0.5:
-#                 #     prompt += "○ Moderate performance"
-#                 # else:
-#                 #     prompt += "✗ Poor performance"
-                
-#                 prompt += "\n\n"
-            
-#             # Show best so far
-#             best = max(self.trial_history, key=lambda x: x['score'])
-#             prompt += f"""🏆 Best so far (Trial {best['iteration']}): Score={best['score']:.4f}
-#   Config: {best['params']}
-  
-# """
-        
-#         else:
-#             prompt += """## Previous Trials
-# No trials yet. This is the first iteration.
-
-# ## Suggestions for First Trial
-# - Start with snapkv (good balance)
-# - Try compression_ratio around 0.5-0.6
-
-
-# """
-        
-#         # Request for next configuration
-#         prompt += """## Your Task
-#         Based on the trials above, suggest the NEXT configuration to try.
-#         ## Exploration Encouragement
-#         - Try to explore methods that have not been used in previous trials.
-#         - Avoid always picking the same method unless you have strong evidence it works best.
-#         - You should balance exploration and exploitation.
-
-#         Return a JSON object with these fields:
-#         - reasoning: Why this config (2-3 sentences)
-#         - compression_method: One of [snapkv, observed_attention, knorm, expected_attention]
-#         - compression_ratio: Float between 0.2 and 0.9
-#         """
-#         # - window_size: Integer (optional, method-specific)
-#         # - kernel_size: Integer (optional, for snapkv)
-
-#         if self.task == "multinews":
-#             prompt += """
-#         - max_input_tokens: Integer between 2048-6144 (optional)"""
-
-#         prompt += """
-
-# [Output ONLY JSON]
-# [no prose]
-# Do not include any prefix like "(Valid)" or "Output:".
-# Your output will be parsed directly with `json.loads()`. 
-# Here is the expected format:
-
-# {
-#   "reasoning": "brief reasoning",
-#   "compression_method": "one of [snapkv, observed_attention, knorm, expected_attention]",
-#   "compression_ratio": 0.2-0.9
-# }
-
-# Example:
-# {"reasoning": "snapkv gives balanced accuracy and cost", "compression_method": "snapkv", "compression_ratio": 0.6}
-# """
-# # ,
-# #   "window_size": optional int,
-# #   "kernel_size": optional int,
-# #   "max_input_tokens": optional int
-
-
-#         return prompt
-
     def _create_optimization_prompt(self, iteration: int) -> str:
         """
         Create prompt for LLM to suggest next hyperparameters.
