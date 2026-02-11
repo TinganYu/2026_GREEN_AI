@@ -1,0 +1,120 @@
+# ============================================================
+# llm-compressor 模型壓縮配置
+# ============================================================
+#
+# 支援的量化方法 (使用 scheme 設定):
+#   - gptq: 基於 Hessian 的權重量化 (最成熟)
+#   - awq: 激活感知權重量化 (快速)
+#   - autoround: 基於 SignSGD 的量化調整 (精度最高)
+#
+# 支援的稀疏化方法 (不使用 scheme，使用 sparsity 設定):
+#   - sparsegpt: 稀疏化剪枝 (移除部分權重)
+#
+# 支援的量化方案 (僅適用於 gptq/awq/autoround):
+#   - W4A16: 4-bit weight, FP16 activation (記憶體敏感場景)
+#   - W8A16: 8-bit weight, FP16 activation (平衡方案)
+#   - W8A8: INT8 weight + activation (推理加速)
+#   - FP8: FP8 格式 (需 H100+)
+# ============================================================
+
+model:
+  name: "meta-llama/Llama-3.2-3B-Instruct"
+  dtype: "auto"
+  device_map: "auto"
+  trust_remote_code: true
+
+quantization:
+  enabled: true
+
+  # ===== 主量化方法 =====
+  # 選項: gptq, awq, autoround, sparsegpt
+  method: "sparsegpt"
+
+  # ===== 通用量化設定 =====
+  # scheme 選項: W4A16, W8A16, W8A8, FP8
+  # 注意: scheme 只適用於量化方法 (gptq, awq, autoround)
+  #       SparseGPT 是稀疏化方法，不使用 scheme，請設定 methods.sparsegpt.sparsity
+  scheme: "W4A16"
+  targets: "Linear"
+  ignore: ["lm_head"]
+  # 注意: group_size 只適用於 GPTQ，已移至 methods.gptq.block_size
+
+  # ===== SmoothQuant 前處理（可選）=====
+  # 啟用後會在主量化方法前執行 SmoothQuant
+  # 特別適合 W8A8 量化方案
+  smoothquant:
+    enabled: false
+    smoothing_strength: 0.8
+
+  # ===== 各方法專用參數 =====
+  methods:
+    gptq:
+      # 分組大小 (group_size): 每多少個權重共用一組縮放因子
+      # 128=預設, 64=更高精度, -1=per-channel
+      block_size: 128
+      # 激活排序策略: "weight", "group", "dynamic", "static"
+      # (舊版用 true/false，新版需要字串)
+      actorder: "weight"
+      # 阻尼係數: Hessian 矩陣的正則化，用於穩定量化
+      dampening: 0.01
+
+    awq:
+      # 雙重縮放: 同時考慮權重和激活的縮放
+      duo_scaling: true
+      # 網格搜索數量: 搜索最佳縮放因子時的候選值數量
+      # 更大 = 更高精度但更慢 (10=快速, 20=預設, 50+=高精度)
+      n_grid: 20
+      # 注意: AWQ 的 group_size 由 scheme 內部控制，無法單獨配置
+
+    autoround:
+      # SignSGD 迭代次數: 更多 = 更高精度但更慢
+      # 100=快速測試, 200=預設, 500=高精度
+      iters: 200
+      # 批次大小: 影響記憶體使用和訓練穩定性
+      batch_size: 8
+      # 學習率: null 表示自動決定
+      lr: null
+      # 啟用 torch.compile 加速 (建議開啟)
+      enable_torch_compile: true
+      # 注意: AutoRound 的 group_size 由 scheme 內部控制，無法單獨配置
+
+    sparsegpt:
+      # ===== 兩種稀疏模式（擇一使用）=====
+      #
+      # 模式 1: 非結構化稀疏
+      #   設定 sparsity，並保持 prunen=0, prunem=0
+      #   稀疏比例: 0.0-1.0 (例如 0.5 表示移除 50% 權重)
+      #
+      # 模式 2: N:M 結構化稀疏
+      #   設定 prunen 和 prunem，sparsity 會被忽略
+      #   稀疏比例由 N:M 決定 = (M-N)/M
+      #   例如 2:4 = 50% 稀疏，可獲得 GPU 加速 (Ampere+)
+      #
+      sparsity: 0.4
+      prunen: 0
+      prunem: 0
+
+# ===== 校準資料集設定 =====
+calibration:
+  # 資料集名稱 (HuggingFace Hub)
+  dataset: "openai/gsm8k"
+  # 資料集分割
+  split: "train"
+  # 文本欄位名稱
+  text_column: "question"
+  # 校準樣本數量: 更多 = 更高精度但更慢
+  # 注意: llmcompressor 0.9.0 的 AWQ 記憶體需求較高，建議 128-256
+  num_samples: 128
+  # 最大序列長度
+  # 注意: 較長序列需要更多 GPU 記憶體
+  max_seq_length: 512
+
+# ===== 輸出設定 =====
+output:
+  # 輸出目錄: null 表示自動生成
+  # 格式: quantized/{model}-llmc-{method}-{scheme}-{timestamp}
+  dir: null
+  # 以壓縮格式儲存
+  # 注意: true = compressed-tensors 格式，只有 vLLM 可推理
+  #       false = 標準格式，transformers 可載入
+  save_compressed: true

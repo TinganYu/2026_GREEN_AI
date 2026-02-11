@@ -17,5 +17,6 @@ Llama*
 test.sh
 CLAUDE.md
 gptqmodel_offload/
+docs/
 .cache
 .vscode

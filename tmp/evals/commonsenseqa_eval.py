@@ -88,7 +88,7 @@ class CommonsenseQAEvaluator(BaseEvaluator):
             for ex in self.config.fewshot_examples:
                 messages.append({
                     "role": "user",
-                    "content": self.config.prompts["fewshot"].format(question=ex['question'], choices=ex['choices'], answer=ex['answer'])
+                    "content": self.config.prompts["fewshot"].format(question=ex['question'], choices=ex['choices'])
                 })
                 messages.append({
                     "role": "assistant", 

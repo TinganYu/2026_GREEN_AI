@@ -323,7 +323,7 @@ class GSM8KEvaluator(BaseEvaluator):
     
     def evaluate(self) -> Dict[str, Any]:
         """執行評估"""
-        if self.generator is None:
+        if not self.is_model_loaded():
             raise RuntimeError("請先呼叫 load_model()")
         
         if self.config.dataset_split:
@@ -399,8 +399,8 @@ class GSM8KEvaluator(BaseEvaluator):
                     torch.cuda.synchronize()
                 gen_start = time.time()
 
-                # 模型生成
-                output = self.generator(prompt, **generation_kwargs)[0]["generated_text"]
+                # 模型生成（使用統一介面，支援 transformers 和 vLLM）
+                output = self.generate(prompt, **generation_kwargs)
 
                 # 同步 GPU，確保生成結束
                 if torch.cuda.is_available():

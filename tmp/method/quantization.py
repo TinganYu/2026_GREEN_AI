@@ -109,7 +109,7 @@ class GPTQConfig(BaseQuantConfig):
     lm_head: bool = field(default=False)
     mse: float = field(default=0.0)
     rotation: Optional[str] = field(default=None, metadata={"choices": ["hadamard", "random"]})
-    calib_num: int = 256
+    calib_num: int = 512
 
     @property
     def method_name(self) -> str:
@@ -172,6 +172,7 @@ class AWQConfig(BaseQuantConfig):
     q_group_size: int = field(default=128)
     version: str = field(default="gemm", metadata={"choices": ["gemm", "gemv", "marlin", "gemv_fast"]})
     modules_to_not_convert: Optional[List[str]] = field(default=None)
+    calib_num: int = 512
     
     @property
     def method_name(self) -> str:
@@ -476,10 +477,11 @@ class Quantizer:
         """執行 AWQ 量化"""
         try:
             from awq import AutoAWQForCausalLM
+            from datasets import load_dataset
         except ImportError:
             raise ImportError(
                 "❌ 請先安裝 AWQ 依賴:\n"
-                "   pip install autoawq"
+                "   pip install autoawq datasets"
             )
 
         self._log_start("AWQ")
@@ -510,6 +512,14 @@ class Quantizer:
             token=config.hf_token
         )
         logger.info("   ✓ 模型載入完成")
+
+        # 準備校準資料
+        logger.info("🔹 準備校準資料...")
+        calibration_dataset = [
+            ex["question"] + " " + ex["answer"]
+            for ex in load_dataset("openai/gsm8k", "main", split="train").select(range(config.calib_num))
+        ]
+        logger.info(f"   ✓ 準備了 {len(calibration_dataset)} 個校準樣本")
         
         # 執行量化
         logger.info("🔹 開始量化（這可能需要幾分鐘）...")
@@ -518,7 +528,7 @@ class Quantizer:
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats()
 
-        model.quantize(tokenizer, quant_config=quant_config)
+        model.quantize(tokenizer, quant_config=quant_config, calib_data=calibration_dataset)
 
         # 統計 GPU 記憶體與 throughput
         if torch.cuda.is_available():

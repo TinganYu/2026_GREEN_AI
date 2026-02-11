@@ -3,7 +3,7 @@
 # ============================================
 
 experiment:
-  name: "gemma-2-2b-it-multiobjective-opt"
+  name: "gemma-2-2b-it"
   output_dir: "results/optimization"
 
 # --------------------------------------------
@@ -103,16 +103,16 @@ multiobjective:
 
   # 硬約束（剪枝篩選器）
   constraints:
-    enabled: false
-    accuracy_min: -0.15
-    gpu_peak_max: -0.10
-    latency_max: 0.50
+    enabled: true
+    accuracy_min: -0.50
+    gpu_peak_max: -0.20
+    latency_max: 10.0
 
   # 用戶目標（用於推薦）
   targets:
-    accuracy_min: -0.10
-    gpu_peak_max: -0.50
-    latency_max: 1.5
+    accuracy_min: -0.30
+    gpu_peak_max: -0.40
+    latency_max: 1.0
 
 # --------------------------------------------
 # 4. 優化器配置
@@ -160,11 +160,11 @@ optimizer:
 
   # === 參數搜索空間 ===
   search_space:
-    methods: ["gptq", "awq", "bnb"]
+    methods: ["gptq"]
 
     gptq:
-      bits: [2, 3, 4, 8]
-      group_size: [-1, 16, 32, 64, 128]
+      bits: [4]
+      group_size: [128]
       calib_num: [256]
       desc_act: [true, false]
       sym: [true, false]

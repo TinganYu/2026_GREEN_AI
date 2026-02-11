@@ -67,7 +67,7 @@ gsm8k:
   prompts:
     direct: "Question: {question}\n\nAnswer:"
     
-    fewshot: "Given the following problem, reason and give a final answer.\nProblem: {question}\nYour response should end with 'The final answer is [answer]'."
+    fewshot: "Given the following problem, reason and give a final answer.\nProblem: {question}\nYour response should end with 'The final answer is [answer]'.\n"
     
     cot: "Question: {question}\n\nLet's solve this step-by-step:"
 

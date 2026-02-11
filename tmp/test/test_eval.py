@@ -71,10 +71,43 @@ def create_evaluator(dataset_name: str, config: Dict[str, Any]):
 
 
 def detect_quantization(model_path: str) -> str:
-    """從模型路徑偵測量化類型"""
+    """
+    從模型路徑偵測量化類型
+
+    優先順序：
+    1. 檢查 config.json 中的 quantization_config
+    2. 從路徑名稱推斷
+    """
+    import json
+    from pathlib import Path
+
+    # 首先嘗試從 config.json 偵測
+    config_path = Path(model_path) / "config.json"
+    if config_path.exists():
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+
+            quant_config = config.get("quantization_config", {})
+            quant_method = quant_config.get("quant_method", "")
+
+            # llmcompressor 使用 compressed-tensors 格式
+            if quant_method == "compressed-tensors":
+                return "llmcompressor"
+            elif quant_method == "gptq":
+                return "gptq"
+            elif quant_method == "awq":
+                return "awq"
+        except Exception:
+            pass
+
+    # 從路徑名稱推斷
     model_lower = model_path.lower()
-    
-    if "gptq" in model_lower:
+
+    # llmcompressor 模型通常有 "llmc" 標記
+    if "llmc" in model_lower or "llmcompressor" in model_lower:
+        return "llmcompressor"
+    elif "gptq" in model_lower:
         return "gptq"
     elif "awq" in model_lower:
         return "awq"

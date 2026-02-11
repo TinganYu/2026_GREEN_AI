@@ -1,0 +1,136 @@
+# ============================================================
+# llm-compressor 配置 v2 - 支援 Recipe 組合
+# ============================================================
+#
+# 新設計：使用 recipe 列表，可自由組合多個 modifier
+#
+# 支援的 Modifier:
+#   - smoothquant: 平滑激活異常值（前處理）
+#   - sparsegpt: 稀疏化剪枝
+#   - gptq: GPTQ 權重量化
+#   - awq: AWQ 權重量化
+#   - autoround: AutoRound 量化（精度最高，但較慢）
+#
+# 常見組合範例:
+#   1. 純量化:        [gptq] 或 [autoround]
+#   2. 純剪枝:        [sparsegpt]
+#   3. 平滑+量化:     [smoothquant, gptq]
+#   4. 剪枝+量化:     [sparsegpt, gptq]
+#   5. 剪枝+高精度量化: [sparsegpt, autoround]
+#   6. 三合一:        [smoothquant, sparsegpt, gptq]
+#
+# 量化方法比較:
+#   - GPTQ:      速度快，精度中等
+#   - AWQ:       速度快，精度略優於 GPTQ
+#   - AutoRound: 速度慢（需迭代優化），精度最高
+# ============================================================
+
+model:
+  name: "meta-llama/Llama-3.2-1B-Instruct"
+  dtype: "auto"
+  device_map: "auto"
+  trust_remote_code: true
+
+# ===== Recipe 配置（核心）=====
+# 按順序執行的 modifier 列表
+recipe:
+  # --- 範例 1: 純 GPTQ 量化 ---
+  # - type: gptq
+  #   scheme: W4A16
+  #   actorder: true
+
+  # --- 範例 2: 2:4 稀疏 + W4A16 量化（官方推薦組合）---
+  # - type: sparsegpt
+  #   sparsity: 0.5
+  #   prunen: 2
+  #   prunem: 4
+  # - type: gptq
+  #   scheme: W4A16
+
+  # --- 範例 3: SmoothQuant + W8A8 量化 ---
+  # - type: smoothquant
+  #   smoothing_strength: 0.8
+  # - type: gptq
+  #   scheme: W8A8
+
+  # --- 範例 4: 非結構化 50% 剪枝 + 4-bit 量化 ---
+  - type: sparsegpt
+    sparsity: 0.5
+    prunen: 0       # 0 = 非結構化稀疏
+    prunem: 0
+  - type: gptq
+    scheme: W4A16
+    actorder: true
+    dampening: 0.01
+
+# ===== Modifier 參數參考 =====
+modifier_defaults:
+  # 通用參數（所有 modifier 共用）
+  common:
+    targets: "Linear"
+    ignore: ["lm_head"]
+
+  # SmoothQuant 參數
+  smoothquant:
+    smoothing_strength: 0.8  # 0.0-1.0，越高越平滑
+
+  # SparseGPT 參數
+  sparsegpt:
+    sparsity: 0.5      # 稀疏比例 0.0-1.0
+    prunen: 0          # N:M 稀疏的 N（0=非結構化）
+    prunem: 0          # N:M 稀疏的 M
+    # 常見 N:M 配置:
+    #   2:4 - GPU 加速，Ampere+ 支援
+    #   4:8 - 更激進
+    #   0:0 - 非結構化（更靈活但無硬體加速）
+
+  # GPTQ 參數
+  gptq:
+    scheme: W4A16      # W4A16, W8A16, W8A8, FP8
+    block_size: 128    # 分組大小（llmcompressor 用 block_size），-1=per-channel
+    actorder: "weight" # 激活排序: "weight", "group", "dynamic", "static"
+    dampening: 0.01    # 阻尼係數（Hessian 矩陣的正則化）
+
+  # AWQ 參數
+  # 注意：AWQ 的 group_size 由 scheme 內部控制，預設為 128
+  awq:
+    scheme: W4A16
+    duo_scaling: true  # 雙重縮放（同時考慮權重和激活）
+    n_grid: 20         # 縮放因子搜索的候選值數量
+
+  # AutoRound 參數（精度最高，但需要較長時間）
+  # 注意：AutoRound 的 group_size 由 scheme 內部控制
+  autoround:
+    scheme: W4A16
+    iters: 200           # SignSGD 迭代次數，越多精度越高但越慢
+    batch_size: 8        # 批次大小（影響記憶體使用）
+    lr: null             # 學習率，null 表示自動決定
+    enable_torch_compile: true  # 啟用 torch.compile 加速（建議開啟）
+
+# ===== 校準資料集 =====
+calibration:
+  dataset: "openai/gsm8k"
+  split: "train"
+  text_column: "question"
+  num_samples: 256
+  max_seq_length: 512
+
+# ===== 輸出設定 =====
+output:
+  dir: null  # null = 自動生成
+  save_compressed: true
+
+# ===== 執行模式 =====
+execution:
+  # single: 單次執行所有 modifier（適合簡單組合）
+  # staged: 分階段執行（適合 sparsity + quantization）
+  mode: "staged"
+
+  # 分階段配置（僅 staged 模式使用）
+  stages:
+    # 第一階段: 剪枝
+    - name: "sparsity_stage"
+      modifiers: ["sparsegpt", "smoothquant"]  # 執行這些類型的 modifier
+    # 第二階段: 量化
+    - name: "quantization_stage"
+      modifiers: ["gptq", "awq", "autoround"]
