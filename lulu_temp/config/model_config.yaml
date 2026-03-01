@@ -1,0 +1,158 @@
+# ============================================
+# SHARED CONFIGURATION (All Tasks)
+# ============================================
+model:
+  name: "nvidia/Llama-3.1-Minitron-4B-Width-Base"
+  torch_dtype: "float16"
+  device_map: "cuda:1"
+  trust_remote_code: true
+  low_cpu_mem_usage: true
+  attn_implementation: "eager"
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+  save_logs: true
+  log_dir: "./logs"
+
+system:
+  device: "cuda:1"
+  mixed_precision: true
+  gradient_checkpointing: false
+  clear_cache_frequency: 50
+  torch_compile: false
+
+# Shared KV compression defaults (can be overridden per task)
+kv_compression:
+  enabled: true
+  compression_ratio: 0.5
+  compression_method: "expected_attention"
+  compression_frequency: 32
+  
+  methods:
+    snapkv:
+      window_size: 32
+      kernel_size: 5
+    observed_attention:
+      pass
+    streaming_llm:
+      pass
+    knorm:
+      pass
+    expected_attention:
+      pass
+
+# Shared tuning defaults (can be overridden per task)
+tuning:
+  enabled: true
+  adaptive: false
+  compression_methods_to_test: 
+    - "expected_attention"
+    - "streaming_llm"
+    # - "observed_attention"
+    - "knorm"
+  compression_ratios_to_test: [0.75, 0.3]
+  max_iterations: 2  # Fewer for testing
+  accuracy_weight: 1.0  # Only accuracy for now
+  co2_weight: 0.0  # Disabled
+  enable_co2_tracking: false  # Disabled!
+
+# Keep this at root (default for all tasks)
+generation:
+  max_new_tokens: 512
+  temperature: 0.7
+  do_sample: true
+  top_p: 0.9
+  top_k: 50
+  repetition_penalty: 1.1
+
+# ============================================
+# TASK-SPECIFIC CONFIGURATIONS
+# Everything is explicit here!
+# ============================================
+tasks:
+  # GSM8K Math Reasoning
+  gsm8k:
+    dataset:
+      name: "gsm8k"
+      config: "main"
+      split: "test"
+      num_samples: 1500
+      
+      prompts:
+        chain_of_thought: |
+          Question: {question}
+
+          Let's solve this step-by-step:
+
+          Answer:
+        
+        direct: |
+          Question: {question}
+          Answer:
+    
+    generation:
+      max_new_tokens: 1024
+      temperature: 0.1
+      do_sample: false
+      top_p: 0.9
+      top_k: 50
+      repetition_penalty: 1.1
+    
+    evaluation:
+      use_chain_of_thought: true
+      save_results: true
+      results_dir: "./results"
+      
+      metrics:
+        - "accuracy"
+        - "valid_prediction_ratio" 
+        - "compression_stats"
+      
+      answer_patterns:
+        - r"####\s*([+-]?\d*\.?\d+)"
+        - r"[Aa]nswer[:\s]*([+-]?\d*\.?\d+)"
+        - r"[+-]?\d*\.?\d+"
+  
+  # MultiNews Summarization
+  multinews:
+    dataset:
+      name: "alexfabbri/multi_news"
+      split: "test"
+      num_samples: 1500
+      max_input_tokens: 1024
+      
+      prompts:
+        summarization: |
+          Read the following news articles and write a comprehensive summary that captures the main points:
+
+          {document}
+
+          Summary:
+    
+    generation:
+      max_new_tokens: 128
+      temperature: 0.7
+      do_sample: true
+      top_p: 0.95
+      top_k: 50
+      repetition_penalty: 1.3
+    
+    evaluation:
+      save_results: true
+      results_dir: "./results"
+      
+      metrics:
+        - "rouge_scores"
+        - "compression_stats"
+      
+      rouge:
+        use_stemmer: true
+        metrics: ["rouge1", "rouge2", "rougeL"]
+    
+    # Task-specific KV compression overrides
+    kv_compression:
+      methods:
+        snapkv:
+          window_size: 128  # Larger for long documents
+          kernel_size: 7
