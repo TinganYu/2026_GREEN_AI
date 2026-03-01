@@ -187,6 +187,8 @@ class TruthfulQAEvaluator(BaseEvaluator):
             torch.cuda.reset_peak_memory_stats()
             torch.cuda.synchronize()
 
+        self._start_energy_tracking()
+
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(header)
             for idx, sample in enumerate(dataset):
@@ -279,8 +281,9 @@ class TruthfulQAEvaluator(BaseEvaluator):
             logger.info(f"🔹 峰值 GPU 記憶體使用量: {peak_memory:.2f} MB")
         logger.info(f"✅ 評估完成！最終準確率: {final_accuracy:.4f} ({correct}/{total})")
         logger.info(f"📄 結果已儲存至: {output_file}")
-        
-        
+
+        energy_metrics = self._stop_energy_tracking()
+
         return {
             "accuracy": final_accuracy,
             "correct": correct,
@@ -297,6 +300,7 @@ class TruthfulQAEvaluator(BaseEvaluator):
             "total_output_tokens": total_generated_tokens,
             "total_generation_time_sec": round(total_generation_time, 4),
             "throughput_tokens_per_sec": round(throughput, 4),
+            **energy_metrics,
             "quantization_config": self.get_quantization_config(),
             "results": self.results
         }

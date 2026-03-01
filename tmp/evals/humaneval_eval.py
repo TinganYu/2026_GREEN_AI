@@ -184,7 +184,9 @@ class HumanEvalEvaluator(BaseEvaluator):
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats()
             torch.cuda.synchronize()
-        
+
+        self._start_energy_tracking()
+
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(header)
             for idx, sample in enumerate(dataset):
@@ -302,7 +304,9 @@ class HumanEvalEvaluator(BaseEvaluator):
 
         pass_at_1 = metrics_dict.get("pass@1", 0.0)
         logger.info(f"✅ 評估完成！Pass@1: {pass_at_1:.4f}")
-  
+
+        energy_metrics = self._stop_energy_tracking()
+
         for item in self.results:
             idx = item["index"]
             run_info = details_dict.get(idx, [])
@@ -330,6 +334,7 @@ class HumanEvalEvaluator(BaseEvaluator):
             "total_output_tokens": total_generated_tokens,
             "total_generation_time_sec": round(total_generation_time, 4),
             "throughput_tokens_per_sec": round(throughput, 4),
+            **energy_metrics,
             "quantization_config": self.get_quantization_config(),
             "results": self.results
         }

@@ -86,6 +86,7 @@ class BaseEvaluator(ABC):
         self.generator = None
         self.results = []
         self.dataset_name = dataset_name
+        self._energy_tracker = None
         
         logger.info(f"📋 評估配置已載入: {self.config.model_path}")
 
@@ -618,6 +619,38 @@ class BaseEvaluator(ABC):
             logger.info(f"✅ 取得 quantization_config: {list(quant_config.keys())}")
         return quant_config
     
+    def _start_energy_tracking(self):
+        """啟動 CodeCarbon 能耗追蹤（若未安裝則跳過）"""
+        try:
+            from codecarbon import EmissionsTracker
+            self._energy_tracker = EmissionsTracker(
+                log_level="warning",
+                tracking_mode="process",
+            )
+            self._energy_tracker.start()
+            logger.info("CodeCarbon 能耗追蹤已啟動")
+        except ImportError:
+            self._energy_tracker = None
+            logger.warning("codecarbon 未安裝，跳過能耗追蹤 (pip install codecarbon)")
+        except Exception as e:
+            self._energy_tracker = None
+            logger.warning(f"CodeCarbon 啟動失敗: {e}")
+
+    def _stop_energy_tracking(self) -> Dict[str, Any]:
+        """停止追蹤並回傳能耗指標"""
+        if self._energy_tracker is None:
+            return {}
+        try:
+            emissions_kg = self._energy_tracker.stop()
+            energy_kwh = self._energy_tracker._total_energy.kWh
+            return {
+                "energy_consumed_kwh": round(energy_kwh, 8),
+                "emissions_kg_co2": round(emissions_kg, 8),
+            }
+        except Exception as e:
+            logger.warning(f"CodeCarbon 停止失敗: {e}")
+            return {}
+
     def save_results(self, results: Dict[str, Any], filename: Optional[str] = None):
         """
         儲存評估結果為 JSON

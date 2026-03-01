@@ -14,7 +14,9 @@ test.py
 Llama*
 *.log
 *.json
-test.sh
+*.csv
+*.sh
+*.txt
 CLAUDE.md
 gptqmodel_offload/
 docs/

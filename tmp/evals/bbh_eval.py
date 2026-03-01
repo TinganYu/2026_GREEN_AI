@@ -361,6 +361,8 @@ class BBHEvaluator(BaseEvaluator):
         total_generated_tokens = 0
         total_generation_time = 0.0
 
+        self._start_energy_tracking()
+
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(header)
             for task_name in tasks:
@@ -399,7 +401,9 @@ class BBHEvaluator(BaseEvaluator):
             logger.info(f"🔹 峰值 GPU 記憶體使用量: {peak_memory:.2f} MB")
         logger.info(f"✅ 全部評估完成！整體準確率: {final_accuracy:.4f}")
         logger.info(f"📄 結果已儲存至: {output_file}")
-        
+
+        energy_metrics = self._stop_energy_tracking()
+
         return {
             "accuracy": final_accuracy,
             "correct": total_correct,
@@ -417,6 +421,7 @@ class BBHEvaluator(BaseEvaluator):
             "total_output_tokens": total_generated_tokens,
             "total_generation_time_sec": round(total_generation_time, 4),
             "throughput_tokens_per_sec": round(throughput, 4),
+            **energy_metrics,
             "quantization_config": self.get_quantization_config(),
             "task_results": task_results,
             "results": self.results
