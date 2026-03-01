@@ -1,5 +1,5 @@
 # code from https://github.com/IST-DASLab/gptq
-
+####change much, did not work, might need to copy the original code back and modify it again
 import math
 import time
 
@@ -10,7 +10,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from modules.svd_linear import SVDLinear
-
+import os
+os.environ["GPTQMODEL_TRITON_DISABLE"] = "1"
 DEBUG = False
 
 
@@ -144,8 +145,8 @@ class Quantizer(nn.Module):
         return torch.all(self.scale != 0)
 
 
-def find_layers(module, layers=[nn.Conv2d, nn.Linear], name=""):
-    if type(module) in layers:
+def find_layers(module, layers=(nn.Linear,SVDLinear), name=""):
+    if isinstance(module, layers):
         return {name: module}
     res = {}
     for name1, child in module.named_children():
@@ -162,18 +163,54 @@ def rtn_quant_sequential(model, wbits):
     elif "llama" in model.config._name_or_path:
         layers = model.model.layers
     for i in range(len(layers)):
-        layer = layers[i].to(model.device)
-        subset = find_layers(layer)
+        layer = layers[i] # Modifying in-place, no need to move to device again
+        
+        # Update find_layers to look for both types
+        subset = find_layers(layer, layers=(nn.Linear, SVDLinear))
+        
         for name in subset:
-            quantizer = Quantizer()
-            quantizer.configure(wbits, perchannel=True, sym=False, mse=False)
-            quantizer.find_params(subset[name].weight.data.float(), weight=True)
-            wq = quantizer.quantize(subset[name].weight.data.float())
-            subset[name].weight.data = wq.to(subset[name].weight.data.dtype)
-            print(f"Quantizing {name} finished")
-        del layer
-        torch.cuda.empty_cache()
+            module = subset[name]
+            
+            # Helper to apply quantization to a specific weight matrix
+            # def apply_rtn(target_module):
+            #     quantizer = Quantizer()
+            #     quantizer.configure(wbits, perchannel=True, sym=False, mse=False)
+            #     # Access the weight data safely
+            #     w_data = target_module.weight.data.float()
+            #     quantizer.find_params(w_data, weight=True)
+            #     wq = quantizer.quantize(w_data)
+            #     target_module.weight.data = wq.to(target_module.weight.data.dtype)
+            def apply_rtn(target_module):
+                quantizer = Quantizer()
+                quantizer.configure(wbits, perchannel=True, sym=False, mse=False)
+                
+                # 1. Get the data and ensure it's a float for calculation
+                w_data = target_module.weight.data.clone().float()
+                
+                # 2. Find quantization parameters
+                quantizer.find_params(w_data, weight=True)
+                if not quantizer.ready():
+                    print(f"⚠️ Warning: Quantizer not ready for module! Scale is zero.")
+                # 3. Quantize the data
+                wq = quantizer.quantize(w_data)
+                
+                # 4. Use .copy_() to overwrite the original memory buffer
+                # This ensures the 'unique' count will actually drop
+                target_module.weight.data = torch.round(w_data / quantizer.scale).to(torch.int8)
 
+
+            if isinstance(module, SVDLinear):
+                # Quantize both matrices in the SVD pair
+                print(f"DEBUG: Found SVDLinear layer: {name}")
+                apply_rtn(module.ALinear)
+                apply_rtn(module.BLinear)
+            else:
+                # Standard nn.Linear
+                apply_rtn(module)
+                
+            print(f"Quantizing {name} finished")
+            
+        torch.cuda.empty_cache()
 
 def awq_quant_sequential(model, tokenizer, wbits):
     from awq.models import LlamaAWQForCausalLM
@@ -194,7 +231,7 @@ def awq_quant_sequential(model, tokenizer, wbits):
                     layers.append(
                         dict(
                             prev_op=module.BLinear,
-                            layers=[module.ALinear],
+                            layers=[module.ALinear],  
                             inp=input_feat[inp_name + ".ALinear"],
                             module2inspect=module2inspect,
                             kwargs=kwargs,

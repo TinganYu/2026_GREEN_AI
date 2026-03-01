@@ -1,3 +1,5 @@
+##待修正，改成只需要build_asvd_repo了
+
 """
 ASVD-based Adaptive Tuner
 Uses LLM to suggest hyperparameters based on previous trial feedback
@@ -391,9 +393,9 @@ class ASVDAdaptiveTuner:
 
     ### 🛠 Deep Parameter Insights (Maintain these constraints)
 
-    1. **alpha** (float, 0.3-0.7): 
+    1. **alpha** (float, 0.3-1.0): 
     - **Role:** Controls the sensitivity to activation magnitudes. 
-    - **Mechanism:** A higher alpha (e.g., 0.6-0.7) puts more weight on preserving high-activation features, which are often critical for "knowledge" and "logic". 
+    - **Mechanism:** A higher alpha (e.g., 0.3-1.0) puts more weight on preserving high-activation features, which are often critical for "knowledge" and "logic". 
     - **Tuning Intuition:** If GSM8K accuracy drops significantly but PPL remains stable, alpha is likely too low to protect logic-critical singular values.
 
     2. **param_ratio_target** (float, 0.5-0.95): 
@@ -434,29 +436,47 @@ class ASVDAdaptiveTuner:
     """
             best = max(self.trial_history, key=lambda x: x['score'])
             prompt += f"\n🏆 Current Best: Trial {best['iteration']} (Score: {best['score']:.4f})\n"
+
+            last_trial = self.trial_history[-1]
+            if last_trial['accuracy'] < best['accuracy'] * 0.8:
+                # 情況 A：上次搞砸了 -> 強制恢復
+                prompt += f"\n⚠️ ALERT: Last trial FAILED (Acc dropped significantly). DO NOT decrease ratio. Fix it by increasing Ratio(preferred), Alpha or changing Method.\n"
+            elif last_trial['accuracy'] >= best['accuracy'] * 0.98:
+                # 情況 B：效能很穩 -> 鼓勵突破，不要停留在原位
+                prompt += f"\n💡 STRATEGY: Performance is solid. You are ENCOURAGED to push the ratio 2-3% lower, but you must justify your choice.\n"
+
         else:
             prompt += "\n### 🚀 Initial Strategy: Start with 0.90-0.95 ratio to establish a performance ceiling.\n"
 
         prompt += """
     ### 🎯 Your Task
-    Suggest the NEXT configuration using a **5-8 sentence reasoning** process. 
+    Suggest the NEXT configuration using a **4-6 sentence reasoning** process that MUST address: 
+    1. Comparison between Trial {iteration-1} and the Best Trial.
+    2. Why the previous choice succeeded or failed.
+    3. Your justification for increasing or decreasing the aggression (ratio).
     Analyze the trade-off between the 'alpha' protection layer and the 'param_ratio' budget.
+
+    ### 🔎 Trend Analysis & Guardrails
+    - **Performance Floor:** If Accuracy drops below 0.1 (10%) or significant logical collapse occurs (compared to your best trial), you MUST immediately increase `param_ratio_target`(preferred) or `alpha`. 
+    - **Learning from Failure:** Analyze why previous low-ratio trials failed. If a ratio of 0.7 resulted in 0% accuracy, do NOT suggest 0.65 or 0.7. Instead, pivot back to a known "safe zone" (e.g., 0.90) and adjust `alpha` or `scaling_method` first.
+    - **Strict Logic:** If the current trial's accuracy is worse than the best trial, your next suggestion should prioritize "Exploitation" (recovering performance) over "Exploration" (pushing compression), such as increase `alpha` (to protect remaining weights), increase ratio (the most significant parameter) or switch to a more robust `scaling_method` (like `fisher`).
+
+    ### 🧭 Exploration Protocol
+    - **Phased Approach:** 
+        - **Phase 1 (Early Trials):** Map the "Safe Zone" by testing different `scaling_method` and `alpha` at high ratios (0.85-0.95).
+        - **Phase 2 (Discovery):** Only when a stable method is found, incrementally push `param_ratio_target` down (e.g., steps of 0.05).
+    - **The Recovery Pivot:** If a trial results in a significant Accuracy drop (>20% relative loss), the next trial MUST NOT decrease the ratio further. Instead, it must either:
+        1. Revert to the last "Safe Ratio" and try a different `scaling_method`.
+        2. Increase `alpha` significantly to see if the current ratio can be "saved" by better protection.
+    - **Diversity over Repetition:** Avoid testing the same `param_ratio_target` with the same `scaling_method` if it has already failed.
 
     Return a JSON object with these fields:
     - reasoning: Why this config (2-3 sentences)
-    - alpha: Float between 0.3 and 0.7
-    - param_ratio_target: Float between 0.5 and 0.95
+    - alpha: Float between 0.3 and 1
+    - param_ratio_target: Float between 0.5 and 0.99
     - scaling_method: One of [abs_mean, abs_max, fisher]
     - n_calib_samples: Integer between 32 and 128
-    - calib_dataset: One of [wikitext2, ptb]
-
-    ### Guidelines
-    - Balance exploration and exploitation
-    **Note: Early-stage exploration is highly encouraged. Don't be afraid to test different scaling methods, compression ratio or alpha values to map the performance landscape.**
-    - If all trials use same method, try different approaches
-    - High compression (low param_ratio) + low alpha may degrade performance
-    - For first trials, keep configurations conservative
-    
+    - calib_dataset: One of [wikitext2, ptb]  
     
     [Output ONLY JSON]
     [no prose]
@@ -466,8 +486,8 @@ class ASVDAdaptiveTuner:
     Example:
     {
     "reasoning": "Detailed 5-8 sentence analysis goes here...",
-    "alpha": 0.55,
-    "param_ratio_target": 0.85,
+    "alpha": 0.85,
+    "param_ratio_target": 0.90,
     "scaling_method": "fisher",
     "n_calib_samples": 32,
     "calib_dataset": "wikitext2"
@@ -743,7 +763,6 @@ class ASVDAdaptiveTuner:
             env = os.environ.copy()
             env['PYTORCH_ALLOC_CONF'] = 'expandable_segments:True'
             
-            # 強制只使用 CUDA:0 (RTX 4090 24GB，驗證過足夠運行)
             # 之前的 CUDA:1 (RTX 3060 12GB) 會 OOM
             env['CUDA_VISIBLE_DEVICES'] = '0'
             

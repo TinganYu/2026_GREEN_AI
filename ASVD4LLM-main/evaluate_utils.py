@@ -96,6 +96,8 @@ class EvalLM(BaseLM):
 def evaluate_perplexity(model, dataset, limit):
     """
     dataset: input ids tensor of shape [batch, sequence length]
+    
+    Memory-optimized version with explicit cleanup to prevent CUDA memory fragmentation
     """
     nsamples, seqlen = dataset.size()
 
@@ -104,18 +106,39 @@ def evaluate_perplexity(model, dataset, limit):
     for i in range(nsamples):
         if i == limit:
             break
-        input_ids = dataset[i : i + 1, :-1].to(model.device)
-        labels = dataset[i : i + 1, 1:].contiguous()
-        logits = model(input_ids=input_ids)[0]
-        shift_logits = logits[:, :, :]
-        shift_labels = labels.to(model.device)
-        loss_fct = nn.CrossEntropyLoss()
-        loss = loss_fct(
-            shift_logits.view(-1, shift_logits.size(-1)),
-            shift_labels.view(-1),
-        )
-        neg_log_likelihood = loss.float() * seqlen
-        nlls.append(neg_log_likelihood)
+        try:
+            input_ids = dataset[i : i + 1, :-1].to(model.device)
+            labels = dataset[i : i + 1, 1:].contiguous()
+            
+            # Forward pass
+            logits = model(input_ids=input_ids)[0]
+            shift_logits = logits[:, :, :]
+            shift_labels = labels.to(model.device)
+            
+            # Calculate loss
+            loss_fct = nn.CrossEntropyLoss()
+            loss = loss_fct(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+            )
+            neg_log_likelihood = loss.float() * seqlen
+            nlls.append(neg_log_likelihood)
+        except RuntimeError as e:
+            # Handle potential CUDA OOM or other runtime errors gracefully
+            print(f"Warning: Error processing sample {i}: {e}")
+            # Try to recover by clearing cache
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            # Skip this sample and continue
+            continue
+        finally:
+            # Clean up GPU memory to prevent fragmentation
+            # Especially important in long loops
+            if (i + 1) % 5 == 0:  # Clean cache every 5 samples
+                torch.cuda.empty_cache() if torch.cuda.is_available() else None
+    
+    if len(nlls) == 0:
+        raise RuntimeError("No valid samples were processed in evaluate_perplexity")
+    
     ppl = torch.exp(torch.stack(nlls).sum() / (len(nlls) * seqlen))
     return ppl.item()
 

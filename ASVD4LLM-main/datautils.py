@@ -37,6 +37,17 @@ def sample_train_loaders(name, tokenizer, nsamples=128, seed=0, seqlen=2048):
             trust_remote_code=True
         )
         traindata = "\n\n".join(traindata["text"])
+    elif "gsm8k" in name:
+        ds = load_dataset("openai/gsm8k", "main", split="train", trust_remote_code=True)
+        ds = ds.shuffle(seed=seed)
+        trainloader = []
+        for i in range(min(nsamples, len(ds))):
+            ex = ds[i]
+            txt = ex.get("question", "") + " " + ex.get("answer", "")
+            enc = tokenizer(txt, return_tensors="pt", truncation=True, max_length=seqlen)
+            inp = enc.input_ids[:, :seqlen]
+            trainloader.append(inp)
+        return trainloader
     else:
         raise NotImplementedError
 
@@ -114,6 +125,8 @@ def get_calib_data(name, tokenizer, model_id, nsamples, seqlen=2048, seed=3, use
     if os.path.exists(cache_file):
         traindataset = torch.load(cache_file)
         return traindataset
+    # set seeds for reproducibility of sampling
+    set_seed(seed)
     if name == "c4":
         traindata = load_dataset(
             "allenai/c4", data_files={"train": "en/c4-train.00000-of-01024.json.gz"}, split="train",trust_remote_code=True
@@ -138,6 +151,27 @@ def get_calib_data(name, tokenizer, model_id, nsamples, seqlen=2048, seed=3, use
                 inp = trainenc.input_ids[:, :seqlen]
                 attention_mask = torch.ones_like(inp)
                 traindataset.append({"input_ids": inp, "attention_mask": attention_mask})
+        return traindataset
+    elif name == "gsm8k":
+        # GSM8K is a QA dataset with 'question' and 'answer' fields; sample and tokenize
+        ds = load_dataset("openai/gsm8k", "main", split="train", trust_remote_code=True)
+        ds = ds.shuffle(seed=seed)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        selected = ds.select(range(min(nsamples, len(ds))))
+        traindataset = []
+        for ex in selected:
+            q = ex.get("question", "")
+            a = ex.get("answer", "")
+            txt = q + " " + a
+            if use_bos:
+                txt = tokenizer.bos_token + txt
+            # Pad and truncate to seqlen for consistent tensor shapes
+            trainenc = tokenizer(txt, return_tensors="pt", padding="max_length", truncation=True, max_length=seqlen)
+            inp = trainenc.input_ids
+            attention_mask = trainenc.attention_mask
+            traindataset.append({"input_ids": inp, "attention_mask": attention_mask})
+        torch.save(traindataset, cache_file)
         return traindataset
     elif name == "selfgen":
         raise NotImplementedError
@@ -190,5 +224,10 @@ def get_eval_loaders(name, tokenizer):
             trust_remote_code=True
         )
         testenc = tokenizer("\n\n".join(testdata["text"]), return_tensors="pt")
+        return testenc
+    if "gsm8k" in name:
+        testdata = load_dataset("openai/gsm8k", "main", split="test", trust_remote_code=True)
+        texts = [q + " " + a for q, a in zip(testdata["question"], testdata["answer"])]
+        testenc = tokenizer("\n\n".join(texts), return_tensors="pt", truncation=True)
         return testenc
     raise NotImplementedError
