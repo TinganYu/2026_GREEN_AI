@@ -1,0 +1,228 @@
+# ============================================
+# 多目標量化優化配置
+# ============================================
+
+experiment:
+  name: "gemma-2-2b-it-multiobjective-opt"
+  output_dir: "results/optimization"
+
+# --------------------------------------------
+# 1. 基線配置
+# --------------------------------------------
+baseline:
+  model_name: "google/gemma-2-2b-it"  # 使用 Instruct 版本以支援推理任務
+  model_dtype: "float16"
+  device_map: "cuda:0"
+  trust_remote_code: true
+
+  # 資料集評估配置 - 每個資料集可以單獨配置
+  datasets:
+    gsm8k:
+      enabled: true
+      num_samples: 50        # 快速測試使用 50-100，完整評估使用全部
+    truthfulqa:
+      enabled: true
+      num_samples: 50
+    commonsenseqa:
+      enabled: false
+      num_samples: 50
+    humaneval:
+      enabled: false
+      num_samples: 50         # 程式碼任務的樣本較少
+    bbh:
+      enabled: false
+      num_samples: 50
+
+# --------------------------------------------
+# 2. 量化評估配置
+# --------------------------------------------
+quantization_eval:
+  # 使用與基線相同的資料集
+  use_same_datasets_as_baseline: true
+
+  # 或使用自定義（可以使用較少樣本以加快量化評估）
+  custom_datasets:
+    gsm8k:
+      num_samples: 50
+    truthfulqa:
+      num_samples: 50
+    humaneval:
+      num_samples: 25
+
+# ====================================================================
+# 3. 多目標優化配置 ⭐ 核心
+# ====================================================================
+#
+# 目標值說明：
+#   - accuracy_change：準確率變化量（正=上升，負=下降）
+#   - gpu_peak_change：GPU 峰值內存變化量（負=減少，正=增加）
+#   - latency_change：推理延遲變化量（負=減少，正=增加）
+#
+# 計算公式：
+#   change = (量化後 - 基線) / 基線
+#
+# 示例：
+#   基線準確率 0.25，量化後 0.20 → accuracy_change = -0.20（下降 20%）
+#   基線準確率 0.25，量化後 0.30 → accuracy_change = +0.20（上升 20%）
+#   基線 GPU 2475MB，量化後 1185MB → gpu_peak_change = -0.52（減少 52%）
+#
+# 約束 vs 目標：
+#   - constraints：硬約束，違反會被剪枝（不進入 Pareto 前沿）
+#   - targets：期望目標，用於推薦配置選擇
+# ====================================================================
+
+multiobjective:
+  # 三個優化目標
+  objectives:
+    - name: "accuracy_change"
+      direction: "maximize"        # 最大化準確率變化（期望正值=上升）
+      weight: 2.0                  # 統一權重：用於推薦配置 + 計算違反分數
+                                   # 2.0 表示準確率的重要性是其他目標的 2 倍
+      # reference_point: -0.15       # 超體積計算的參考點（最壞情況：下降 15%）
+      # description: "準確率變化量（正=上升，負=下降）"
+
+    - name: "gpu_peak_change"
+      direction: "minimize"        # 最小化 GPU 峰值變化（期望負值=減少）
+      weight: 1.0                  # GPU 內存的相對重要性
+      # reference_point: 0.10        # 參考點：增加 10%（最壞情況）
+      # description: "GPU 峰值內存變化量（負=減少，正=增加）"
+
+    - name: "latency_change"
+      direction: "minimize"        # 最小化延遲變化（期望負值=減少）
+      weight: 1.0                  # 推理延遲的相對重要性
+      # reference_point: 0.50        # 參考點：增加 50%（最壞情況）
+      # description: "推理延遲變化量（負=減少，正=增加）"
+
+  # 多個資料集的聚合方法
+  aggregation:
+    method: "average"             # 選項：weighted / average / worst_case
+    dataset_weights:               # 僅當方法為 'weighted' 時使用
+      gsm8k: 0.40
+      truthfulqa: 0.30
+      humaneval: 0.30
+
+  # 硬約束（剪枝篩選器）
+  constraints:
+    enabled: false
+    accuracy_min: -0.15
+    gpu_peak_max: -0.10
+    latency_max: 0.50
+
+  # 用戶目標（用於推薦）
+  targets:
+    accuracy_min: -0.10
+    gpu_peak_max: -0.50
+    latency_max: 1.5
+
+# --------------------------------------------
+# 4. 優化器配置
+# --------------------------------------------
+optimizer:
+  # 選擇優化器
+  type: "optuna_multiobjective"
+  # 選項：
+  #   - "optuna_multiobjective": Optuna 多目標 TPE（推薦）⭐
+  #   - "qehvi": qEHVI（BoTorch）（進階）🔶
+  #   - "random": 隨機搜索（基線）
+
+  # === Optuna 多目標配置 ===
+  optuna:
+    n_trials: 20                   # 總試驗次數
+    n_startup_trials: 8           # 前 15 次試驗進行隨機探索
+
+    sampler: "TPESampler"          # 推薦
+    # 或 "NSGAIISampler"（遺傳演算法，適用於 3+ 個目標）
+
+    # TPE 參數
+    tpe_params:
+      n_ei_candidates: 24          # EI 候選數量
+      multivariate: true           # 考慮參數相關性
+      constant_liar: false
+
+    # NSGA-II 參數（如果使用）
+    nsgaii_params:
+      population_size: 20
+      mutation_prob: 0.1
+      crossover_prob: 0.9
+
+  # === qEHVI 配置（進階）===
+  qehvi:
+    n_trials: 30
+    n_initial_random: 10
+    batch_size: 1                  # 並行評估（如果有多個 GPU）
+
+    # 高斯過程配置
+    gp_kernel: "Matern"            # Matern / RBF
+    gp_nu: 2.5
+
+    # 獲取函數
+    mc_samples: 256                # Monte Carlo 樣本
+
+  # === 參數搜索空間 ===
+  search_space:
+    methods: ["gptq", "awq", "bnb"]
+
+    gptq:
+      bits: [2, 3, 4, 8]
+      group_size: [-1, 16, 32, 64, 128]
+      calib_num: [256]
+      desc_act: [true, false]
+      sym: [true, false]
+      damp_percent: [0.001, 0.005, 0.01, 0.03, 0.05]
+      damp_auto_increment: [0.001, 0.005, 0.01, 0.03, 0.05]
+      act_group_aware: [false]  # `act_group_aware` == `True` requires `desc_act` == `False`
+      static_groups: [true, false]
+      true_sequential: [true, false]
+      lm_head: [false]
+      mse: [0.0, 0.1, 0.2]
+      rotation: [null]
+
+    awq:
+      w_bit: [4]
+      q_group_size: [16, 32, 64, 128]
+      zero_point: [true, false]
+      version: ["gemm"]
+      modules_to_not_convert: [["lm_head"], ["embed_tokens"], ["lm_head", "embed_tokens"], ["lm_head", "layers.*norm*"] , []]
+
+    bnb:
+      bits: [4, 8]
+      bnb_4bit_quant_type: ["nf4", "fp4"]
+      bnb_4bit_use_double_quant: [true, false]
+      bnb_4bit_compute_dtype: ["float16", "bfloat16"]
+      llm_int8_threshold: [4.0, 4.5, 5.0, 6.0]
+      llm_int8_skip_modules: [["lm_head"]]
+      llm_int8_has_fp16_weight: [false]
+      llm_int8_enable_fp32_cpu_offload: [false]
+
+# --------------------------------------------
+# 5. 輸出和視覺化
+# --------------------------------------------
+output:
+  save_all_trials: true
+  save_pareto_frontier: true
+
+  # 推薦策略
+  recommendation:
+    strategy: "closest_to_target"  # 推薦最接近用戶目標的配置
+    # 選項："closest_to_target" / "balanced" / "best_accuracy" / "best_compression"
+
+  # 視覺化
+  visualization:
+    enabled: false
+    plot_types:
+      - "3d_pareto"                # 3D Pareto 前沿
+      - "parallel_coordinates"     # 平行座標圖
+      - "trade_off_matrix"         # 權衡矩陣
+    output_format: "html"          # html / png / pdf
+
+# --------------------------------------------
+# 6. 日誌記錄和快取
+# --------------------------------------------
+logging:
+  level: "INFO"
+  save_logs: true
+  log_file: "optimization.log"
+
+cache:
+  enable_baseline_cache: true
+  cache_dir: ".cache/optimization"
