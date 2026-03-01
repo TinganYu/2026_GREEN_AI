@@ -1,6 +1,6 @@
 # KVPress: LLM KV Cache 壓縮與自適應調整方案簡介
 
-KVPress 是專為 LLM 推理優化設計的組件，位於 `lulu_temp/agents/` 目錄下。它通過在 Attention 層中識別並剔除「不重要」的 Key-Value 對，顯著降低長文本生成的顯存壓力。
+KVPress 是專為 LLM 推理優化設計的組件，位於 `KvPress/agents/` 目錄下。它通過在 Attention 層中識別並剔除「不重要」的 Key-Value 對，顯著降低長文本生成的顯存壓力。
 
 ## 1. 核心壓縮方法 (Base Logic)
 
@@ -16,8 +16,7 @@ KVPress 整合了多種先進的 KV 緩存壓縮算法。這些算法決定了�
 | **Expected Attention** | 基於期望注意力模式進行靜態或動態預測。 | 適合特定分佈的任務。 |
 | **StreamingLLM** | 保留「Attention Sink」（前幾個 Token）與滑動窗口。 | 解決長文本流式推論，防止模型崩潰。 |
 
-> **📌 補充筆記：**
-> 在實際應用中，**SnapKV** 目前是平衡效能與準確率的首選；而 **StreamingLLM** 則是處理超長對話流（甚至無限長度）的適合方案。
+> 在實際應用中，**SnapKV** 目前是平衡效能與準確率的首選
 ---
 ### **核心參數**
 
@@ -49,7 +48,7 @@ KVPress 整合了多種先進的 KV 緩存壓縮算法。這些算法決定了�
 
 以下為 `LLMAdaptiveTuner` 類別在執行優化時的核心邏輯樹：
 ```
-LLMAdaptiveTuner (lulu_temp/agents/llm_tuner.py)
+LLMAdaptiveTuner (KvPress/agents/llm_tuner.py)
    └─ 執行優化流程:
       ├─ 1. 基準測試 (Baseline Phase)
       │    ├─ 暫時關閉 KV 壓縮功能
@@ -102,7 +101,7 @@ tuning:
 ```
 
 
-## 6. 致謝與參考 
+## 6. 參考 
 
 本專案的部分核心實作參考或使用了NVIDIA 的 [KVPress](https://github.com/NVIDIA/kvpress?tab=readme-ov-file) 工具庫。
 

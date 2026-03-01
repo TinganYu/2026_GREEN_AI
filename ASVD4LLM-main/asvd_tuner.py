@@ -393,9 +393,9 @@ class ASVDAdaptiveTuner:
 
     ### 🛠 Deep Parameter Insights (Maintain these constraints)
 
-    1. **alpha** (float, 0.3-1.0): 
+    1. **alpha** (float, 0.3-0.7): 
     - **Role:** Controls the sensitivity to activation magnitudes. 
-    - **Mechanism:** A higher alpha (e.g., 0.3-1.0) puts more weight on preserving high-activation features, which are often critical for "knowledge" and "logic". 
+    - **Mechanism:** A higher alpha (e.g., 0.3-0.7) puts more weight on preserving high-activation features, which are often critical for "knowledge" and "logic". 
     - **Tuning Intuition:** If GSM8K accuracy drops significantly but PPL remains stable, alpha is likely too low to protect logic-critical singular values.
 
     2. **param_ratio_target** (float, 0.5-0.95): 
@@ -463,7 +463,7 @@ class ASVDAdaptiveTuner:
 
     ### 🧭 Exploration Protocol
     - **Phased Approach:** 
-        - **Phase 1 (Early Trials):** Map the "Safe Zone" by testing different `scaling_method` and `alpha` at high ratios (0.85-0.95).
+        - **Phase 1 (Early Trials):** Map the "Safe Zone" by testing different `scaling_method` and `alpha` at midium ratios.
         - **Phase 2 (Discovery):** Only when a stable method is found, incrementally push `param_ratio_target` down (e.g., steps of 0.05).
     - **The Recovery Pivot:** If a trial results in a significant Accuracy drop (>20% relative loss), the next trial MUST NOT decrease the ratio further. Instead, it must either:
         1. Revert to the last "Safe Ratio" and try a different `scaling_method`.
@@ -472,7 +472,7 @@ class ASVDAdaptiveTuner:
 
     Return a JSON object with these fields:
     - reasoning: Why this config (2-3 sentences)
-    - alpha: Float between 0.3 and 1
+    - alpha: Float between 0.3 and 0.7
     - param_ratio_target: Float between 0.5 and 0.99
     - scaling_method: One of [abs_mean, abs_max, fisher]
     - n_calib_samples: Integer between 32 and 128
@@ -486,7 +486,7 @@ class ASVDAdaptiveTuner:
     Example:
     {
     "reasoning": "Detailed 5-8 sentence analysis goes here...",
-    "alpha": 0.85,
+    "alpha": 0.6,
     "param_ratio_target": 0.90,
     "scaling_method": "fisher",
     "n_calib_samples": 32,
@@ -732,69 +732,69 @@ class ASVDAdaptiveTuner:
             logger.error(f"Error building model: {e}")
             return {"error": str(e)}
     
-    def _run_asvd_experiment(self, config: Dict) -> Dict:
-        """
-        執行 ASVD 實驗
+    # def _run_asvd_experiment(self, config: Dict) -> Dict:
+    #     """
+    #     執行 ASVD 實驗
         
-        這只是啟動 asvd.py 進程。
-        """
-        logger.info(f"Running ASVD experiment with config: {config}")
+    #     這只是啟動 asvd.py 進程。
+    #     """
+    #     logger.info(f"Running ASVD experiment with config: {config}")
         
-        # 獲得當前目錄 (ASVD4LLM-main)
-        asvd_dir = Path(__file__).parent
+    #     # 獲得當前目錄 (ASVD4LLM-main)
+    #     asvd_dir = Path(__file__).parent
         
-        # 構建 asvd.py 命令 - 只傳遞 asvd.py 支持的參數
-        asvd_cmd = [
-            "python", "asvd.py",
-            "--model_id", self.model_id,
-            "--alpha", str(config['alpha']),
-            "--param_ratio_target", str(config['param_ratio_target']),
-            "--scaling_method", config['scaling_method'],
-            "--n_calib_samples", str(config.get('n_calib_samples', 32)),
-            "--calib_dataset", config.get('calib_dataset', 'wikitext2'),
-            "--act_aware",
-            "--use_cache"
-        ]
+    #     # 構建 asvd.py 命令 - 只傳遞 asvd.py 支持的參數
+    #     asvd_cmd = [
+    #         "python", "asvd.py",
+    #         "--model_id", self.model_id,
+    #         "--alpha", str(config['alpha']),
+    #         "--param_ratio_target", str(config['param_ratio_target']),
+    #         "--scaling_method", config['scaling_method'],
+    #         "--n_calib_samples", str(config.get('n_calib_samples', 32)),
+    #         "--calib_dataset", config.get('calib_dataset', 'wikitext2'),
+    #         "--act_aware",
+    #         "--use_cache"
+    #     ]
         
-        try:
-            logger.info(f"Running: {' '.join(asvd_cmd)}")
+    #     try:
+    #         logger.info(f"Running: {' '.join(asvd_cmd)}")
             
-            # 設置環境變數以避免 GPU 記憶體碎片化和多GPU衝突
-            env = os.environ.copy()
-            env['PYTORCH_ALLOC_CONF'] = 'expandable_segments:True'
+    #         # 設置環境變數以避免 GPU 記憶體碎片化和多GPU衝突
+    #         env = os.environ.copy()
+    #         env['PYTORCH_ALLOC_CONF'] = 'expandable_segments:True'
             
-            # 之前的 CUDA:1 (RTX 3060 12GB) 會 OOM
-            env['CUDA_VISIBLE_DEVICES'] = '0'
+    #         # 之前的 CUDA:1 (RTX 3060 12GB) 會 OOM
+    #         env['CUDA_VISIBLE_DEVICES'] = '0'
             
-            logger.info("Forcing single GPU (CUDA:0) for ASVD subprocess (RTX 4090 has sufficient memory)")
+    #         logger.info("Forcing single GPU (CUDA:0) for ASVD subprocess (RTX 4090 has sufficient memory)")
             
-            # 捕捉輸出以便記錄詳細的錯誤信息
-            result = subprocess.run(asvd_cmd, cwd=str(asvd_dir), 
-                                  timeout=None, env=env)
+    #         # 捕捉輸出以便記錄詳細的錯誤信息
+    #         result = subprocess.run(asvd_cmd, cwd=str(asvd_dir), 
+    #                               timeout=None, env=env)
             
-            # 記錄所有輸出
-            if result.stdout:
-                logger.info(f"ASVD stdout:\n{result.stdout}")
-            if result.stderr:
-                logger.error(f"ASVD stderr:\n{result.stderr}")
+    #         # 記錄所有輸出
+    #         if result.stdout:
+    #             logger.info(f"ASVD stdout:\n{result.stdout}")
+    #         if result.stderr:
+    #             logger.error(f"ASVD stderr:\n{result.stderr}")
             
-            if result.returncode != 0:
-                logger.error(f"ASVD failed with return code {result.returncode}")
-                error_msg = f"ASVD failed with return code {result.returncode}"
-                if result.stderr:
-                    error_msg += f"\nError details:\n{result.stderr}"
-                return {"error": error_msg}
+    #         if result.returncode != 0:
+    #             logger.error(f"ASVD failed with return code {result.returncode}")
+    #             error_msg = f"ASVD failed with return code {result.returncode}"
+    #             if result.stderr:
+    #                 error_msg += f"\nError details:\n{result.stderr}"
+    #             return {"error": error_msg}
             
-            logger.info("ASVD completed successfully")
+    #         logger.info("ASVD completed successfully")
             
-        except subprocess.TimeoutExpired:
-            logger.error("ASVD experiment timed out")
-            return {"error": "Timeout"}
-        except Exception as e:
-            logger.error(f"Error running ASVD: {e}")
-            return {"error": str(e)}
+    #     except subprocess.TimeoutExpired:
+    #         logger.error("ASVD experiment timed out")
+    #         return {"error": "Timeout"}
+    #     except Exception as e:
+    #         logger.error(f"Error running ASVD: {e}")
+    #         return {"error": str(e)}
         
-        return {"status": "success"}
+    #     return {"status": "success"}
     
     def _evaluate_config(self, config: Dict, iteration: int) -> Dict:
         """
@@ -815,23 +815,23 @@ class ASVDAdaptiveTuner:
             self.co2_tracker.start()
         
         try:
-            # 步驟 1: 執行 ASVD
-            logger.info(f"[Iteration {iteration}] Starting ASVD experiment")
+            # # 步驟 1: 執行 ASVD  -->不需要了，因為 build_asvd_repo.py 已經包含了 ASVD 的步驟
+            # logger.info(f"[Iteration {iteration}] Starting ASVD experiment")
             # 提取推理內容並從傳給腳本的配置中移除
             current_reasoning = config.pop('reasoning', 'No reasoning provided')
-            asvd_result = self._run_asvd_experiment(config)
+            # asvd_result = self._run_asvd_experiment(config)
             
-            if "error" in asvd_result:
-                logger.warning(f"ASVD experiment failed: {asvd_result['error']}")
-                return {
-                    "iteration": iteration,
-                    "params": config,
-                    "reasoning": current_reasoning, # 保存 LLM 當時的思考邏輯
-                    "score": 0.0,
-                    "accuracy": 0.0,
-                    "status": "failed",
-                    "error": asvd_result.get("error")
-                }
+            # if "error" in asvd_result:
+            #     logger.warning(f"ASVD experiment failed: {asvd_result['error']}")
+            #     return {
+            #         "iteration": iteration,
+            #         "params": config,
+            #         "reasoning": current_reasoning, # 保存 LLM 當時的思考邏輯
+            #         "score": 0.0,
+            #         "accuracy": 0.0,
+            #         "status": "failed",
+            #         "error": asvd_result.get("error")
+            #     }
             
             # 步驟 2: 構建壓縮後的模型 (build_asvd_repo.py)
             logger.info(f"[Iteration {iteration}] Building ASVD compressed model")
@@ -935,8 +935,8 @@ class ASVDAdaptiveTuner:
                     actual_ratio = m_cfg.get("actual_param_ratio", actual_ratio)
             
             # 2. 讀取真實 PPL 分數 (從 asvd.py 輸出的 JSON)
-            # 假設 asvd.py 執行路徑下的 output/temp_asvd_metrics.json
-            metrics_path = Path.cwd() / "ASVD4LLM-main" / "output" / "temp_asvd_metrics.json"
+            # 假設 asvd_tuner.py 執行路徑下的 output/temp_asvd_metrics.json
+            metrics_path = Path(__file__).parent/ "output" / "temp_asvd_metrics.json"
             ppl_wiki = 1000.0
             ppl_ptb = 1000.0
             avg_ppl = 1000.0
@@ -991,37 +991,7 @@ class ASVDAdaptiveTuner:
             logger.info(f"[Iteration {iteration}] Score: {score:.4f}, Acc: {accuracy:.4f}, Real_Ratio: {actual_ratio:.4f}, Avg_PPL: {avg_ppl:.2f}")
             
             return result
-            # # 估計壓縮比 (簡化)
-            # compression_ratio = config['param_ratio_target']
-            # compression_score = 1.0 - (1.0 - compression_ratio)  # 壓縮比越低越好
-            
-            # # PPL 分數 (如果有的話)
-            # ppl_score = 1.0  # 默認
-            
-            # # 綜合分數
-            # score = (
-            #     self.accuracy_weight * accuracy +
-            #     self.compression_weight * compression_score +
-            #     self.ppl_weight * ppl_score
-            # )
-            
-            # elapsed = (datetime.now() - start_time).total_seconds()
-            
-            # result = {
-            #     "iteration": iteration,
-            #     "params": config,
-            #     "score": score,
-            #     "accuracy": accuracy,
-            #     "compression_ratio": compression_ratio,
-            #     "ppl": "N/A",
-            #     "elapsed_seconds": elapsed,
-            #     "status": "success"
-            # }
-            
-            # logger.info(f"[Iteration {iteration}] Score: {score:.4f}, Accuracy: {accuracy:.4f}")
-            
-            # return result
-            
+        
         except Exception as e:
             logger.error(f"Error evaluating config: {e}")
             return {

@@ -158,10 +158,10 @@ def main(args):
     save_path = os.path.join(
         parent_dir,
         "output",
-        f"{model_name}-asvd{int(args.param_ratio_target*100)}quant{args.weight_quant}-alpha{int(args.alpha*100)}",
+        f"{model_name}-asvd{int(args.param_ratio_target*100)}-alpha{int(args.alpha*100)}",
     )
     
-        # f"{model_name}-asvd{int(args.param_ratio_target*100)}-alpha{int(args.alpha*100)}",
+        # f"{model_name}-asvd{int(args.param_ratio_target*100)}quant{args.weight_quant}-alpha{int(args.alpha*100)}",
     os.makedirs(save_path, exist_ok=True)
     
     tokenizer.save_pretrained(save_path)
@@ -217,14 +217,27 @@ def main(args):
     print(result)
     
     # 保存評估結果
-    if not os.path.exists("output"):
-        os.makedirs("output")
-    with open("output/result.txt", "a+") as f:
+    # 1. 取得 build_asvd_repo.py 的絕對路徑並推算根目錄 (ASVD4LLM-main)
+    current_file_path = Path(__file__).resolve()
+    root_dir = current_file_path.parent.parent 
+    
+    # 2. 定義統一的輸出目錄 (ASVD4LLM-main/output)
+    output_dir = root_dir / "output"
+    # 3. 確保目錄存在 (使用 Path.mkdir 更簡潔且防錯)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 4. 使用絕對路徑寫入 result.txt
+    result_txt_path = output_dir / "result.txt"
+    with open(result_txt_path, "a+", encoding="utf-8") as f:
         f.write(f"{args}\n")
         f.write(f"{result}\n")
     
-    with open("output/temp_asvd_metrics.json", "w") as f:
-        json.dump(result, f)
+    # 5. 使用絕對路徑寫入 temp_asvd_metrics.json (供 asvd_tuner 讀取)
+    metrics_json_path = output_dir / "temp_asvd_metrics.json"
+    with open(metrics_json_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2)
+
+    print(f"✅ 評估結果已儲存至: {output_dir}")
     
     del model
     del tokenizer
@@ -355,7 +368,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--eval_ppl",
         type=str,
-        default="",
+        default="wikitext2,ptb",
         help="evaluation datasets for ppl",
     )
     parser.add_argument(
