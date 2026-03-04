@@ -95,7 +95,7 @@ def run_quantization(model_path: str, method: str, bits: int, group_size: int = 
     output_path = quantizer.quantize(config)
     return output_path
 
-def _update_yaml_config_for_eval(model_path: str):
+def _update_yaml_config_for_eval(model_path: str, task: str):
     """Helper purely for test_eval.py since we haven't refactored it yet."""
     if not CONFIG_PATH.exists():
         logger.warning(f"Config file not found: {CONFIG_PATH}. Skipping YAML update.")
@@ -107,30 +107,67 @@ def _update_yaml_config_for_eval(model_path: str):
     if 'model' not in config: config['model'] = {}
     config['model']['name'] = model_path
     
+    if 'dataset' not in config: config['dataset'] = {}
+    
+    # Support multiple tasks separated by comma
+    tasks = [t.strip() for t in task.split(',')]
+    config['dataset']['selected'] = tasks
+
     with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
         yaml.dump(config, f)
 
-def run_evaluation(model_path: str, task: str) -> dict:
-    """Runs evaluation. Kept as subprocess to avoid touching test_eval.py for now."""
-    logger.info(f"--- Evaluating Model at: {model_path} ---")
+def run_evaluation(model_path: str, tasks: list, acc_weight: float = 0.7, lat_weight: float = 0.2, vram_weight: float = 0.1) -> dict:
+    """執行多個任務的評估並計算加權總分"""
+    all_task_results = {}
+    total_acc = 0.0
+    total_lat = 0.0
+    vram_list = []
     
-    _update_yaml_config_for_eval(model_path)
-    
-    env = os.environ.copy()
-    env['CUDA_VISIBLE_DEVICES'] = env.get('CUDA_VISIBLE_DEVICES', '0')
-    
-    subprocess.run([sys.executable, str(EVAL_SCRIPT)], env=env, cwd=str(ROOT_DIR))
-    
-    model_name = Path(model_path).name
-    json_path = ROOT_DIR / "results" / model_name / f"{task}_results.json"
+    # Handle tasks if it's a comma-separated string
+    if isinstance(tasks, str):
+        tasks_list = [t.strip() for t in tasks.split(',')]
+    else:
+        tasks_list = tasks
 
-    if json_path.exists():
-        with open(json_path, 'r', encoding='utf-8') as f:
-            eval_data = json.load(f)
-            accuracy = eval_data.get('accuracy', 0.0)
-            latency = eval_data.get('total_generation_time_sec', 0.0)
-            score = (0.7 * accuracy) + (0.3 * (1.0 / (latency + 1e-6)))
-            return {"accuracy": accuracy, "latency": latency, "score": score}
+    for task in tasks_list:
+        logger.info(f"--- Evaluating {task} ---")
+        _update_yaml_config_for_eval(model_path, task)
+        
+        env = os.environ.copy()
+        env['CUDA_VISIBLE_DEVICES'] = env.get('CUDA_VISIBLE_DEVICES', '0')
+        subprocess.run([sys.executable, str(EVAL_SCRIPT)], env=env, cwd=str(ROOT_DIR))
+        
+        model_name = Path(model_path).name
+        json_path = ROOT_DIR / "results" / model_name / f"{task}_results.json"
+        
+        if json_path.exists():
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                acc = data.get('accuracy', 0.0)
+                lat = data.get('total_generation_time_sec', 0.0)
+                vram = data.get('gpu_peak_mb', 0.0) / 1024.0 # Convert to GB
+                
+                # 計算該 task 的獨立分數
+                task_score = (acc_weight * acc) + (lat_weight * (1.0 / (lat + 1e-6))) + (vram_weight * (1.0 / (vram + 1e-6)))
+                all_task_results[task] = {"accuracy": acc, "latency": lat, "vram": vram, "score": task_score}
+                total_acc += acc
+                total_lat += lat
+                vram_list.append(vram)
+        else:
+            logger.warning(f"Result file not found for task {task}: {json_path}")
+            all_task_results[task] = {"accuracy": 0.0, "latency": 0.0, "vram": 0.0, "score": 0.0}
+
+    # 計算平均值或加權總分
+    avg_acc = total_acc / len(tasks_list) if tasks_list else 0.0
+    avg_lat = total_lat / len(tasks_list) if tasks_list else 0.0
+    max_vram = max(vram_list) if vram_list else 0.0
     
-    logger.warning(f"Result file not found: {json_path}")
-    return {"accuracy": 0.0, "latency": 0.0, "score": 0.0}
+    final_score = (acc_weight * avg_acc) + (lat_weight * (1.0 / (avg_lat + 1e-6))) + (vram_weight * (1.0 / (max_vram + 1e-6)))
+    
+    return {
+        "accuracy": avg_acc, 
+        "latency": avg_lat, 
+        "vram": max_vram,
+        "score": final_score, 
+        "details": all_task_results # 傳給 LLM 診斷用
+    }
