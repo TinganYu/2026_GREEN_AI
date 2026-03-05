@@ -25,7 +25,8 @@ class OptimizationOrchestrator:
         self.llm = LLMDecisionMaker(model_id, task, max_iterations)
         self.best_score = -float('inf')
         self.best_result = None
-        self.weights = weights or {"acc": 0.7, "lat": 0.1, "vram": 0.2}
+        self.weights = weights or {"acc": 0.5, "lat": 0.1, "vram": 0.2, "emit": 0.2}
+        self.baseline_metrics = None
         
         # Setup output directory
         model_name = Path(model_id).name
@@ -33,6 +34,11 @@ class OptimizationOrchestrator:
         self.output_path.mkdir(parents=True, exist_ok=True)
 
     def optimize(self):
+        logger.info("--- Extracting Baseline Metrics ---")
+        baseline_results = run_evaluation(self.base_model_path, self.task, weights=self.weights, baseline_metrics=None)
+        self.baseline_metrics = baseline_results
+        logger.info(f"Baseline established: {self.baseline_metrics}")
+
         for i in range(1, self.max_iterations + 1):
             logger.info(f"\n===== Iteration {i} =====")
             
@@ -68,9 +74,8 @@ class OptimizationOrchestrator:
             metrics = run_evaluation(
                 current_model, 
                 self.task, 
-                acc_weight=self.weights["acc"], 
-                lat_weight=self.weights["lat"],
-                vram_weight=self.weights["vram"]
+                weights=self.weights,
+                baseline_metrics=self.baseline_metrics
             )
             # 記錄結果
             trial_data = {
@@ -143,9 +148,10 @@ if __name__ == "__main__":
     parser.add_argument("--acc_weight", type=float, default=0.7, help="Weight for Accuracy")
     parser.add_argument("--lat_weight", type=float, default=0.1, help="Weight for Latency")
     parser.add_argument("--vram_weight", type=float, default=0.2, help="Weight for VRAM")
+    parser.add_argument("--emit_weight", type=float, default=0.0, help="Weight for Emissions")
     
     args = parser.parse_args()
     
-    weights = {"acc": args.acc_weight, "lat": args.lat_weight, "vram": args.vram_weight}
+    weights = {"acc": args.acc_weight, "lat": args.lat_weight, "vram": args.vram_weight, "emit": args.emit_weight}
     orchestrator = OptimizationOrchestrator(args.model_id, args.task, args.max_iterations, weights)
     orchestrator.optimize()

@@ -50,7 +50,7 @@ class LLMDecisionMaker:
             
             # 1. 基本分數與表現
             line = f"- [Iter {trial.get('iteration')}]: Score={metrics.get('score', 0):.4f}"
-            line += f" (Acc: {metrics.get('accuracy', 0):.4f}, Lat: {metrics.get('latency', 0):.4f}s, VRAM: {metrics.get('vram', 0):.4f}GB)"
+            line += f" (Acc: {metrics.get('accuracy', 0):.4f}, Lat: {metrics.get('latency', 0):.4f}s, VRAM: {metrics.get('vram', 0):.4f}GB, Emit: {metrics.get('emissions', 0):.4f}kg CO2)"
             
             # 2. 多任務細節 (壓縮成一行，節省 Token)
             if details:
@@ -69,17 +69,14 @@ class LLMDecisionMaker:
         
         return f"""You are a multi-objective optimization agent for LLM compression.
 Task: {self.task} on {self.model_id}.
-Objective: Minimize VRAM and Latency while maximizing Accuracy across all tasks.
 
-### UNDERSTANDING LATENCY:
-- **Unit**: All 'latency' values are in seconds (sec).
-- **Goal**: MINIMIZE this value. Smaller is better.
-- **Score Impact**: Your final 'score' is calculated as `(acc_weight * avg_acc) + (lat_weight * (1.0 / (avg_lat + 1e-6))) + (vram_weight * (1.0 / (max_vram + 1e-6)))`. 
-- **Inference Speed**: High latency (e.g., > 10s) indicates a very slow model, which significantly penalizes the score even if Accuracy is high.
-- **Strategy**: If Latency is the bottleneck, prioritize 'asvd_only' or 'hybrid' modes to reduce the structural rank of the model.
+### UNDERSTANDING THE SCORING LOGIC:
+- **Goal**: MINIMIZE Latency, VRAM, and CO2 Emissions while MAXIMIZING Accuracy.
+- **Score Impact**: Your final 'score' is calculated using baseline normalization. A score of 1.0 means it is exactly equal to the uncompressed base model. A score > 1.0 means it is an overall improvement.
+- **Formula**: `(W_acc * (Acc_new/Acc_base)) + (W_lat * (Lat_base/Lat_new)) + (W_vram * (VRAM_base/VRAM_new)) + (W_emit * (Emit_base/Emit_new))`
 
-### Available Strategies:
-1. **ASVD (Structural)**: Best for improving Latency (Inference Speed). Note: ASVD significantly improves Latency through low-rank decomposition, but excessive compression (ratio < 0.8) often leads to a sharp decline in Accuracy.
+### Available Modes:
+1. **ASVD (Structural)**: Best for improving Latency (Inference Speed). Note: ASVD significantly improves Latency through low-rank decomposition, but often leads to a sharp decline in Accuracy; therefore, higher param_ratio_target values are recommended.
 2. **Quantization (GPTQ/AWQ/BNB)**: Best for reducing VRAM (Memory).
    - GPTQ: bits, group_size, desc_act.
    - AWQ: bits, group_size.
@@ -116,8 +113,11 @@ Iteration: {iteration}/{self.max_iterations}
 ### Your Task:
 Suggest the next strategy based on the multi-task results and the Pareto frontier.
 - If a specific task's Accuracy dropped significantly, analyze the configuration used.
-- Pareto Frontier represents the best balance between Accuracy and Latency. Try to explore configurations that could expand this frontier.
+- Pareto Frontier represents the best balance between Accuracy, VRAM usage, and Latency. Try to explore configurations that could expand this frontier.
 - If Accuracy is stable across all tasks, try to push for higher compression (lower ratio or bits).
+- It is encouraged to experiment with different modes first, but remember the critical constraints when combining ASVD and Quantization.
+- It is forbidden to use same parameters repeatedly without trying other configurations, unless you have a strong justification based on the trial history.
+- STRATEGY GUIDELINE: In early iterations, prioritize exploring 'asvd_only' and 'quant_only' independently to understand their isolated impacts on the baseline score. Reserve 'hybrid' mode for later iterations once you know which standalone parameters are safe.
 
 [Output ONLY JSON] [no prose]
 

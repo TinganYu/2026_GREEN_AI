@@ -116,11 +116,12 @@ def _update_yaml_config_for_eval(model_path: str, task: str):
     with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
         yaml.dump(config, f)
 
-def run_evaluation(model_path: str, tasks: list, acc_weight: float = 0.7, lat_weight: float = 0.2, vram_weight: float = 0.1) -> dict:
+def run_evaluation(model_path: str, tasks: list, weights: dict, baseline_metrics: dict = None) -> dict:    
     """執行多個任務的評估並計算加權總分"""
     all_task_results = {}
     total_acc = 0.0
     total_lat = 0.0
+    total_emit = 0.0
     vram_list = []
     
     # Handle tasks if it's a comma-separated string
@@ -146,28 +147,49 @@ def run_evaluation(model_path: str, tasks: list, acc_weight: float = 0.7, lat_we
                 acc = data.get('accuracy', 0.0)
                 lat = data.get('total_generation_time_sec', 0.0)
                 vram = data.get('gpu_peak_mb', 0.0) / 1024.0 # Convert to GB
+                emit = data.get('emissions_kg_co2', 0.0) # Extract CodeCarbon data
                 
-                # 計算該 task 的獨立分數
-                task_score = (acc_weight * acc) + (lat_weight * (1.0 / (lat + 1e-6))) + (vram_weight * (1.0 / (vram + 1e-6)))
-                all_task_results[task] = {"accuracy": acc, "latency": lat, "vram": vram, "score": task_score}
+                all_task_results[task] = {"accuracy": acc, "latency": lat, "vram": vram, "emissions": emit}
                 total_acc += acc
                 total_lat += lat
+                total_emit += emit
                 vram_list.append(vram)
         else:
             logger.warning(f"Result file not found for task {task}: {json_path}")
-            all_task_results[task] = {"accuracy": 0.0, "latency": 0.0, "vram": 0.0, "score": 0.0}
+            all_task_results[task] = {"accuracy": 0.0, "latency": 0.0, "vram": 0.0, "emissions": 0.0, "score": 0.0}
 
     # 計算平均值或加權總分
     avg_acc = total_acc / len(tasks_list) if tasks_list else 0.0
     avg_lat = total_lat / len(tasks_list) if tasks_list else 0.0
     max_vram = max(vram_list) if vram_list else 0.0
-    
-    final_score = (acc_weight * avg_acc) + (lat_weight * (1.0 / (avg_lat + 1e-6))) + (vram_weight * (1.0 / (max_vram + 1e-6)))
+    avg_emit = total_emit / len(tasks_list) if tasks_list else 0.0
+      
+    if not baseline_metrics:
+        return {
+            "accuracy": avg_acc, "latency": avg_lat, "vram": max_vram, "emissions": avg_emit,
+            "score": 1.0, # Baseline score is exactly 1.0
+            "details": all_task_results
+        }
+
+    # --- NORMALIZED SCORING LOGIC ---
+    base_acc = baseline_metrics.get('accuracy', 1e-6)
+    base_lat = baseline_metrics.get('latency', 1e-6)
+    base_vram = baseline_metrics.get('vram', 1e-6)
+    base_emit = baseline_metrics.get('emissions', 1e-6)
+
+    norm_acc = avg_acc / (base_acc + 1e-6)
+    norm_lat = base_lat / (avg_lat + 1e-6)
+    norm_vram = base_vram / (max_vram + 1e-6)
+    norm_emit = base_emit / (avg_emit + 1e-6)
+
+    final_score = (
+        (weights.get('acc', 0.0) * norm_acc) + 
+        (weights.get('lat', 0.0) * norm_lat) + 
+        (weights.get('vram', 0.0) * norm_vram) +
+        (weights.get('emit', 0.0) * norm_emit)
+    )
     
     return {
-        "accuracy": avg_acc, 
-        "latency": avg_lat, 
-        "vram": max_vram,
-        "score": final_score, 
-        "details": all_task_results # 傳給 LLM 診斷用
+        "accuracy": avg_acc, "latency": avg_lat, "vram": max_vram, "emissions": avg_emit,
+        "score": final_score, "details": all_task_results
     }
