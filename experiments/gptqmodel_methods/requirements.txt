@@ -1,0 +1,30 @@
+# Installation order matters:
+#   1. pip install torch --index-url https://download.pytorch.org/whl/cu128
+#   2. pip install -v gptqmodel --no-build-isolation --force-reinstall --no-cache-dir
+#   3. pip install -r requirements.txt
+#
+# Step 2 MUST use --no-build-isolation so GPTQModel compiles CUDA kernels
+# (AWQ V2, QQQ) against the installed torch. Without it, only a pre-built
+# wheel is installed and kernels will be missing.
+
+# Core dependencies
+transformers
+datasets
+accelerate
+safetensors
+pyyaml
+python-dotenv
+
+# Evaluation dependencies
+evaluate
+numpy
+codecarbon
+
+# Optional: BitBLAS format support (alternative to marlin, similar speed)
+# ✓ Functional when used via gptqmodel (torch is pre-loaded before bitblas initializes)
+# ⚠ Fails in standalone scripts that import bitblas before torch/gptqmodel
+#   Root cause: tilelang subpackage lazy-loads CUDA symbols; works once torch's
+#   CUDA runtime is already initialized in the process.
+# Install: pip install bitblas thefuzz
+bitblas
+thefuzz

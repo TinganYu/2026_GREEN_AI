@@ -1,0 +1,108 @@
+# ============================================================================
+# AWQ 量化參數優化搜索空間配置
+# AWQ Quantization Parameter Optimization Search Space Config
+# ============================================================================
+# AWQ（Activation-aware Weight Quantization）：林子揚等人提出的方法
+# 核心差異（vs GPTQ）：
+#   - 使用激活值統計（activation scaling）而非 Hessian 矩陣
+#   - 找出對激活值影響最大的 1% 權重，給予較大縮放保護
+#   - 無需 Hessian 計算 → 量化速度更快，記憶體需求更低
+#   - 對 LLaMA/Mistral 系列效果尤其好
+#
+# ⚠️ 相容性重要事項：
+#   若想讓輸出可被 autoawq 加載：
+#     - format:    "llm_awq"   (必須)
+#     - sym:       false       (必須，zero_point=True)
+#     - pack_dtype: "int32"    (必須，autoawq 不支援 int16)
+#   若只用 GPTQModel 推理：
+#     - format:    "gemm" / "gemv" (更快)
+#     - sym:       false 仍建議（AWQ 標準）
+#
+# 搜索空間建議 / Suggested search space:
+#   bits:       [4] (AWQ 主要 4-bit；8-bit 幾乎無損不必優化)
+#   group_size: [32, 64, 128]
+#   format:     固定 "gemm"（穩定，不需調整）
+#
+# ⚠️ AWQ format 說明：
+#   - "gemm" 最穩定，適合 batch 推理，固定使用
+#   - "gptq" / "gptq_v2" 設定後會被自動 fix 成 "gemm"（非 GPTQ 格式）
+#   - "bitblas" 不支援（Config ERR）
+#   - "qqq" 不適用於 AWQ
+#   - llm_awq / gemv / gemv_fast / marlin：理論可用，但為降低套件風險固定用 gemm
+# ============================================================================
+
+model:
+  name: "meta-llama/Llama-3.2-1B-Instruct"
+  output_dir: null
+  output_base: "quantized_test"
+
+calibration:
+  dataset: "openai/gsm8k"
+  dataset_config: "main"
+  split: "train"
+  num_samples: 256            # AWQ 對樣本數不如 GPTQ 敏感，256 已足夠
+  text_column: "question+answer"
+  batch_size: 1
+
+quantization:
+  quant_method: "awq"
+
+  # [FIXED] bits - AWQ kernel 只支援 4-bit
+  # AwqTorchQuantLinear 僅支援 bits=4，設定 8-bit 會直接拋錯：
+  #   ValueError: only supports [4] bits: actual bits = 8
+  bits: 4
+
+  # --------------------------------------------------------------------------
+  # [TUNABLE ⬆⬆] group_size - 量化粒度
+  # 影響：Accuracy ⬆⬆ | GPU Memory ⬆ | Latency ⬆
+  #
+  # AWQ 中 group_size 的作用與 GPTQ 類似，決定縮放因子的細緻程度：
+  #   32：較細粒度，精度更高，模型稍大
+  #   64：中等平衡
+  #   128：業界標準，最常見  ← 推薦起點
+  #
+  # 搜索空間：[32, 64, 128]
+  # --------------------------------------------------------------------------
+  group_size: 128
+
+  # --------------------------------------------------------------------------
+  # [FIXED] format - 推理格式
+  # 影響：Accuracy ✗ | GPU Memory ⬆ | Latency ⬆⬆⬆
+  #
+  # 固定使用 "gemm"：最穩定，適合 batch 推理，無額外套件相依
+  #
+  # 其他格式說明（不使用的理由）：
+  #   "llm_awq"  ：autoawq 相容格式，但需額外安裝 autoawq，增加複雜度
+  #   "gemv_fast"/ "gemv"：batch=1 優化，但套件穩定性問題，不納入
+  #   "marlin"   ：雖理論可用，但為避免與 GPTQ marlin 失敗同類問題，固定不用
+  #   "bitblas"  ：AWQ 不支援（Config ERR）
+  # --------------------------------------------------------------------------
+  format: "gemm"
+
+  # ==========================================================================
+  # 以下參數建議固定 / Parameters below are recommended to fix
+  # ==========================================================================
+
+  # [FIXED] sym - 對稱量化
+  # AWQ 標準使用非對稱量化（sym=false，即 zero_point=True）
+  # autoawq 兼容性要求：必須 false
+  # 固定理由：AWQ 的核心設計基於非對稱量化
+  sym: false
+
+  # [FIXED] true_sequential - 逐層順序量化
+  # true 更穩定，固定即可
+  true_sequential: true
+
+  # [FIXED - 僅影響量化過程] offload_to_disk
+  offload_to_disk: true
+
+  # [FIXED] pack_dtype - 打包格式
+  # autoawq 相容性要求：必須 int32（不支援 int16）
+  pack_dtype: "int32"
+
+  # 注意：AWQ 不使用以下 GPTQ 專用參數（設置無效）：
+  #   desc_act    - AWQ 有自己的激活感知機制（activation scaling）
+  #   mse         - AWQ 使用不同的優化目標
+  #   rotation    - AWQ 不支援旋轉量化
+  #   damp_percent- AWQ 不使用 Hessian 矩陣
+  #   gptaq       - GPTAQ 是 GPTQ 的擴展，AWQ 不適用

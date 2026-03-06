@@ -1,0 +1,174 @@
+# ============================================================================
+# 量化超參數調整模板 / Quantization Hyperparameter Tuning Template
+# ============================================================================
+#
+# 使用說明 / How to use:
+#   1. 設定 quantization.quant_method 選擇量化方法（gptq / awq / qqq）
+#   2. 調整對應方法下的 [TUNABLE] 參數
+#   3. [FIXED] 參數建議保持不變
+#   4. 執行：python run_experiment.py --config <此檔案>
+#
+# 參數標記說明 / Annotation guide:
+#   [TUNABLE ⬆⬆⬆] 高影響，強烈建議調整
+#   [TUNABLE ⬆⬆]  中影響，建議調整
+#   [TUNABLE ⬆]   低影響，可選擇性調整
+#   [FIXED]        建議固定，改動收益低或有已知風險
+#
+# 實測環境 / Test environment: RTX 4090, CUDA 12.8, gptqmodel 5.7.0
+# ============================================================================
+
+# ============================================================================
+# 模型設定
+# ============================================================================
+model:
+  name: "meta-llama/Llama-3.2-1B-Instruct"
+  output_dir: null         # null = 自動產生含時間戳的路徑
+  output_base: "quantized_test"
+
+# ============================================================================
+# 校準資料集設定
+# ============================================================================
+calibration:
+  dataset: "openai/gsm8k"
+  dataset_config: "main"
+  split: "train"
+
+  # [TUNABLE ⬆] num_samples - 校準樣本數
+  # 更多樣本 → 更準確的 Hessian 估計 → 精度略高，但量化時間增加
+  # GPTQ/GPTAQ 建議：256（平衡點）；QQQ 建議：512（需更精確的激活值統計）
+  # AWQ 對樣本數較不敏感，128-256 即可
+  num_samples: 256
+
+  text_column: "question+answer"
+  batch_size: 1
+
+# ============================================================================
+# 量化設定
+# ============================================================================
+quantization:
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # 選擇量化方法（修改此行）
+  # Select quantization method: gptq / awq / qqq
+  # ══════════════════════════════════════════════════════════════════════════
+  quant_method: "gptq"
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # 各方法參數（只有 quant_method 對應的方法會被使用）
+  # Per-method parameters (only the selected method's params are applied)
+  # ══════════════════════════════════════════════════════════════════════════
+  methods:
+
+    # ────────────────────────────────────────────────────────────────────────
+    # GPTQ（Hessian-based 逐層量化）
+    # 優勢：最廣泛相容（vllm / transformers），支援 2/3/4/8-bit
+    # 限制：量化速度中等，需要 Hessian 計算
+    # ────────────────────────────────────────────────────────────────────────
+    gptq:
+
+      # [TUNABLE ⬆⬆⬆] bits - 量化精度（最核心的取捨）
+      # 精度 vs 效益對照：
+      #   8-bit：幾乎無損，記憶體 -40%
+      #   4-bit：輕微損失（1-3%），記憶體 -70%   ← 推薦起點
+      #   3-bit：中等損失（3-8%），記憶體 -80%
+      #   2-bit：嚴重損失（>10%），僅限特定任務
+      # 搜索空間：[2, 3, 4, 8]
+      bits: 4
+
+      # [TUNABLE ⬆⬆] group_size - 量化粒度（精度 vs 速度平衡）
+      # 較小的 group_size → 更細的縮放因子 → 精度更高，但模型略大且推理略慢
+      #   -1：per-channel，最快推理，最低精度
+      #   64：細粒度，推薦在 3-bit 時使用
+      #   128：業界標準，最常見選擇   ← 推薦起點
+      # 搜索空間：[-1, 32, 64, 128]
+      group_size: 128
+
+      # [TUNABLE ⬆⬆] format - 推理格式（影響推理速度）
+      # 實測穩定的格式（RTX 4090）：
+      #   "gptq"    ：v1 格式，最廣泛相容（vllm / transformers）  ← 起點
+      #   "gptq_v2" ：v2 格式，零點使用有號整數，精度略優
+      # 搜索空間：["gptq", "gptq_v2"]
+      format: "gptq"
+
+      # [TUNABLE ⬆⬆] desc_act - 降序激活量化（低位數時有幫助）
+      # 原理：按激活值大小降序排列再量化，重要特徵的誤差更小
+      # 建議：2-3 bit 使用 true；4-8 bit 影響不大
+      # 搜索空間：[true, false]
+      desc_act: false
+
+      # [TUNABLE ⬆] damp_percent - Hessian 阻尼係數（穩定性）
+      # 過低（<0.01）：可能出現 NaN，量化失敗
+      # 推薦範圍：0.01 - 0.1
+      # 搜索空間：[0.01, 0.05, 0.1]
+      damp_percent: 0.05
+
+      # [TUNABLE ⬆] mse - MSE 量化正則化（微幅提升精度）
+      # 0.0：標準 GPTQ；>0.0 加入 MSE 項，典型範圍 0.01-0.1
+      # 搜索空間：[0.0, 0.01, 0.05]
+      mse: 0.0
+
+      # --- Dynamic 逐層混合精度（進階功能）---------------------------------
+      # 使用 regex 為特定層設定不同 bits / group_size，範例：
+      # dynamic:
+      #   "+:.*self_attn.*":
+      #     bits: 8
+      #     group_size: 32
+      #   "-:.*lm_head.*": {}    # 排除 lm_head（不量化）
+      dynamic: null
+
+      # [FIXED] 以下參數建議不調整 ──────────────────────────────────────────
+      sym: true              # GPTQ 標準對稱量化
+      rotation: null         # hadamard 實測量化失敗，固定 null
+      true_sequential: true  # 穩定性最佳
+      lm_head: false         # 量化 lm_head 收益極低
+      pack_dtype: "int32"    # 推理標準格式（vllm/transformers 相容）
+      offload_to_disk: true  # 量化過程卸載，不影響推理結果
+
+    # ────────────────────────────────────────────────────────────────────────
+    # AWQ（Activation-aware Weight Quantization）
+    # 優勢：量化速度較快（無需 Hessian），精度通常與 GPTQ 相近或略優
+    # ────────────────────────────────────────────────────────────────────────
+    awq:
+
+      # [TUNABLE ⬆⬆] group_size - 量化粒度
+      # 同 GPTQ，較小 group_size 精度更高
+      # 搜索空間：[32, 64, 128]
+      group_size: 128
+
+      # [FIXED] 以下參數建議不調整 ──────────────────────────────────────────
+      bits: 4                # AwqTorchQuantLinear kernel 只支援 4-bit，無法更改
+      format: "gemm"         # 最穩定，batch 推理優化
+      sym: false             # AWQ 標準非對稱量化（zero_point=True）
+      true_sequential: true
+      pack_dtype: "int32"
+      offload_to_disk: true
+
+    # ────────────────────────────────────────────────────────────────────────
+    # QQQ（W4A8 量化，美團研究院方法）
+    # 優勢：4-bit 權重 + 8-bit 激活值，推理利用 INT8 GEMM 硬體加速
+    # ────────────────────────────────────────────────────────────────────────
+    qqq:
+
+      # [TUNABLE ⬆⬆] group_size - 量化粒度
+      # 較小的 group_size → 更細的縮放因子 → 精度更高，但模型略大
+      # 搜索空間：[32, 64, 128]
+      group_size: 128
+
+      # [TUNABLE ⬆⬆] desc_act - 降序激活量化（QQQ 中較重要）
+      # W4A8 設計中，激活值順序對精度影響比純 W4 更顯著
+      # 搜索空間：[true, false]
+      desc_act: true
+
+      # [TUNABLE ⬆⬆] damp_percent - Hessian 阻尼係數
+      # QQQ 的 Hessian 歸一化後規模恆定 ~2.0，套件預設 0.005（等效阻尼 ≈ 0.01）
+      # 搜索空間：[0.001, 0.005, 0.01]
+      damp_percent: 0.005
+
+      # [FIXED] 以下參數建議不調整 ──────────────────────────────────────────
+      bits: 4                # W4A8 固定 4-bit 權重
+      format: "qqq"
+      sym: true
+      true_sequential: true
+      pack_dtype: "int32"
+      offload_to_disk: true
+      damp_auto_increment: 0.001  # 套件預設（QQQ 的遞增步長，1/10 of GPTQ）

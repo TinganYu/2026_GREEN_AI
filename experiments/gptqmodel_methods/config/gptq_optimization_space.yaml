@@ -1,0 +1,172 @@
+# ============================================================================
+# GPTQ 量化參數優化搜索空間配置
+# GPTQ Quantization Parameter Optimization Search Space Config
+# ============================================================================
+# 用途：帶有詳細註解的優化實驗配置，標記哪些參數值得調整、哪些建議固定
+# Purpose: Annotated config for optimization experiments, marking tunable vs fixed params
+#
+# 參數標記說明 / Parameter annotation guide:
+#   [TUNABLE ⬆⬆⬆] 高影響，強烈建議納入搜索空間
+#   [TUNABLE ⬆⬆]  中影響，建議納入搜索空間
+#   [TUNABLE ⬆]   低影響，可選擇性調整
+#   [FIXED]        建議固定，影響極小或僅影響量化過程本身（不影響推理）
+#
+# 搜索空間建議（實測有效）/ Suggested search space (verified working):
+#   bits:        [2, 3, 4, 8]
+#   group_size:  [16, 32, 64, 128, 256]
+#   format:      ["gptq", "gptq_v2"]  ← marlin 實測失敗；bitblas 套件問題多
+#   desc_act:    [true, false]
+#   damp_percent:[0.005, 0.01, 0.05, 0.1]
+#   mse:         [0.0, 0.01, 0.05, 0.1]
+#
+# ❌ 已實測不建議使用：
+#   rotation="hadamard"：量化失敗，不納入搜索空間
+#   marlin：量化失敗（需特定 kernel 版本）
+#   bitblas：套件相依問題（需 torch 先載入），風險高
+#   gemm, gemv, gemv_fast, llm_awq：AWQ 專用，GPTQ 設定後 Config ERR
+# ============================================================================
+
+# === 模型配置 / Model Config ===
+model:
+  name: "meta-llama/Llama-3.2-1B-Instruct"
+  output_dir: null             # null = 自動生成時間戳路徑 / auto-generate timestamped path
+  output_base: "quantized_test"
+
+# === 校準資料集配置 / Calibration Dataset Config ===
+calibration:
+  dataset: "openai/gsm8k"
+  dataset_config: "main"
+  split: "train"
+  num_samples: 256             # 256 樣本是精度與速度的良好平衡點
+  text_column: "question+answer"
+  batch_size: 1
+
+# === 量化配置 / Quantization Config ===
+quantization:
+  quant_method: "gptq"        # 目前僅測試 GPTQ 方法
+
+  # --------------------------------------------------------------------------
+  # [TUNABLE ⬆⬆⬆] bits - 量化精度（最核心的取捨參數）
+  # 影響：Accuracy ⬆⬆⬆ | GPU Memory ⬆⬆⬆ | Latency ⬆⬆⬆
+  #
+  # 精度 vs 效益對照：
+  #   8-bit：幾乎無損，記憶體減少 ~40%，速度略快
+  #   4-bit：輕微損失（1-3%），記憶體減少 ~70%，速度快 ~1.5-2x  ← 推薦起點
+  #   3-bit：中等損失（3-8%），記憶體減少 ~80%
+  #   2-bit：嚴重損失（>10%），記憶體減少 ~90%，僅限特定任務
+  #
+  # 搜索空間：[2, 3, 4, 8]
+  # --------------------------------------------------------------------------
+  bits: 4
+
+  # --------------------------------------------------------------------------
+  # [TUNABLE ⬆⬆] group_size - 量化粒度（精度與速度的平衡）
+  # 影響：Accuracy ⬆⬆ | GPU Memory ⬆⬆ | Latency ⬆
+  #
+  # 較小的 group_size 提供更細粒度的縮放因子：
+  #   -1 (per-channel)：最快推理，最低精度
+  #   16, 32：高精度，但 dequantization overhead 增加（推理變慢）
+  #   64, 128：良好平衡，128 是最常見選擇  ← 推薦起點
+  #   256, 512：略差精度，推理略快
+  #
+  # 注意：group_size 越小，量化後的模型檔案越大（scales/zeros 更多）
+  # 搜索空間：[-1, 16, 32, 64, 128, 256]
+  # --------------------------------------------------------------------------
+  group_size: 128
+
+  # --------------------------------------------------------------------------
+  # [TUNABLE ⬆⬆] format - 推理格式
+  # 影響：Accuracy ✗ | GPU Memory ⬆ | Latency ⬆⬆
+  #
+  # 格式比較（已在 RTX 4090 實測）：
+  #   "gptq"    ：v1 格式，最廣泛相容（vllm/transformers 皆支援）← 起點
+  #   "gptq_v2" ：v2 格式，零點使用有號整數，精度更準確
+  #               部分舊版 vllm (<0.4.0) 不支援，transformers 支援
+  #
+  # 搜索空間：["gptq", "gptq_v2"]
+  # --------------------------------------------------------------------------
+  format: "gptq"
+
+  # --------------------------------------------------------------------------
+  # [TUNABLE ⬆⬆] desc_act - 降序激活量化（低位數時影響顯著）
+  # 影響：Accuracy ⬆⬆（低位數）/ ⬆（高位數） | GPU Memory ✗ | Latency ✗
+  #
+  # 原理：對激活值按大小降序排列後再量化，減少重要激活值的量化誤差
+  # 建議：
+  #   2-3 bit：建議 true，對精度保留有明顯幫助
+  #   4-8 bit：影響不大，null（讓 GPTQModel 自動決定）即可
+  #
+  # 搜索空間：[true, false]
+  # --------------------------------------------------------------------------
+  desc_act: false
+
+  # --------------------------------------------------------------------------
+  # [TUNABLE ⬆] damp_percent - Hessian 矩陣阻尼係數（收斂穩定性）
+  # 影響：Accuracy ⬆（穩定性） | GPU Memory ✗ | Latency ✗
+  #
+  # 太低（<0.005）：可能出現 NaN，量化失敗
+  # 太高（>0.1）：量化誤差增加，精度下降
+  # 0.05 是最常見且穩定的預設值
+  #
+  # 搜索空間：[0.005, 0.01, 0.05, 0.1]
+  # --------------------------------------------------------------------------
+  damp_percent: 0.05
+
+  # --------------------------------------------------------------------------
+  # [TUNABLE ⬆] mse - MSE 量化正則化（微幅提升精度）
+  # 影響：Accuracy ⬆（微幅） | GPU Memory ✗ | Latency ✗
+  #
+  # 0.0   ：停用 MSE，使用標準 GPTQ 目標函數
+  # >0.0  ：啟用 MSE 量化，在量化目標中加入 MSE 項
+  #         典型範圍：0.01 - 0.1，超過 0.1 效果遞減
+  #         量化時間略有增加（通常 +10-20%）
+  #
+  # 搜索空間：[0.0, 0.01, 0.05, 0.1]
+  # --------------------------------------------------------------------------
+  mse: 0.0
+
+  # ==========================================================================
+  # 以下參數建議固定 / Parameters below are recommended to fix
+  # ==========================================================================
+
+  # [FIXED] sym - 對稱量化
+  # GPTQ 標準使用對稱量化(true)；AWQ 使用非對稱(false)
+  # 固定理由：對同一方法固定，混合會導致不一致的比較基準
+  sym: true
+
+  # [FIXED] true_sequential - 逐層順序量化
+  # true：按 transformer block 順序量化，更穩定（推薦）
+  # false：並行量化，速度稍快但精度略低
+  # 固定理由：差異極小，true 更穩定
+  true_sequential: true
+
+  # [FIXED] lm_head - 量化語言模型頭
+  # 量化 lm_head 收益很小（佔總參數比例低），但可能增加精度風險
+  # 固定理由：標準實驗不量化 lm_head，保持可比性
+  lm_head: false
+
+  # [FIXED] rotation - 旋轉量化
+  # 影響：Accuracy ⬆ | GPU Memory ✗ | Latency ✗
+  #
+  # 實測結果：rotation="hadamard" 量化失敗，固定為 null 不使用
+  # 固定理由：理論上可改善 outlier，但目前環境不穩定
+  rotation: null
+
+  # [FIXED] pack_dtype - 打包資料型別
+  # int32 是推理標準格式，與 transformers/vllm 相容性最佳
+  # 固定理由：影響推理相容性，不影響量化精度
+  pack_dtype: "int32"
+
+  # [FIXED - 僅影響量化過程] offload_to_disk - 磁碟卸載
+  # 量化過程中將中間張量卸載到磁碟，減少量化時的 CPU/GPU 記憶體需求
+  # 不影響推理性能或精度
+  # 固定理由：只影響量化速度，不影響推理結果
+  offload_to_disk: true
+
+  # [FIXED - 僅影響量化過程] 以下參數通常不需調整
+  # 以下項目在 config.json 中可見（由 GPTQModel 自動設置），無需手動指定：
+  #   damp_auto_increment: 0.01  # 量化失敗時自動增加阻尼，保留預設
+  #   pack_impl: "cpu"           # 打包實現方式，cpu 最穩定
+  #   static_groups: false       # 靜態 groups，幾乎不使用
+  #   gc_mode: "interval"        # 量化時的 GC 策略，保留預設
+  #   wait_for_submodule_finalizers: false  # 子模塊等待，保留預設
