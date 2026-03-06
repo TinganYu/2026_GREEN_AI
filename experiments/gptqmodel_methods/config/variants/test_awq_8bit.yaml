@@ -1,0 +1,22 @@
+model:
+  name: "meta-llama/Llama-3.2-1B-Instruct"
+  output_dir: null
+  output_base: "quantized_test"
+
+calibration:
+  dataset: "openai/gsm8k"
+  dataset_config: "main"
+  split: "train"
+  num_samples: 256
+  text_column: "question+answer"
+  batch_size: 1
+
+quantization:
+  quant_method: "awq"
+  bits: 8
+  group_size: 128
+  format: "gemm"
+  sym: false
+  true_sequential: true
+  pack_dtype: "int32"
+  offload_to_disk: true

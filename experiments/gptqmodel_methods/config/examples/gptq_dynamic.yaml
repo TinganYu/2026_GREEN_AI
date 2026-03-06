@@ -1,0 +1,43 @@
+# Dynamic Quantization - per-layer mixed precision
+# Different layers use different bits/group_size based on regex patterns.
+# This allows preserving precision for sensitive layers while compressing others.
+
+model:
+  name: "meta-llama/Llama-3.2-1B-Instruct"
+  output_dir: null
+  output_base: "quantized_test"
+
+calibration:
+  dataset: "openai/gsm8k"
+  dataset_config: "main"
+  split: "train"
+  num_samples: 256
+  text_column: "question+answer"
+  batch_size: 1
+
+quantization:
+  quant_method: "gptq"
+  bits: 4
+  group_size: 128
+  sym: true
+  true_sequential: true
+  format: "gptq"
+  pack_dtype: "int32"
+  offload_to_disk: true
+
+  # Per-layer overrides using regex patterns:
+  #   "+:" prefix = include/override these layers
+  #   "-:" prefix = exclude these layers from quantization
+  dynamic:
+    # Use 8-bit with finer groups for attention layers (more sensitive)
+    "+:.*self_attn.*":
+      bits: 8
+      group_size: 32
+
+    # Use 2-bit aggressive compression for MLP gate layers
+    "+:.*mlp\\.gate_proj.*":
+      bits: 2
+      group_size: 64
+
+    # Exclude the LM head from quantization entirely
+    "-:.*lm_head.*": {}

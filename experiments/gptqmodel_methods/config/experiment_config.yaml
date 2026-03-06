@@ -1,0 +1,73 @@
+# ============================================================================
+# GPTQModel Experiment Config Template
+# ============================================================================
+# This is the main template with all available parameters documented.
+# Copy this file and modify for your experiment.
+# See config/examples/ for ready-to-use configurations.
+#
+# Parameters set to null will be omitted, letting GPTQModel use its defaults.
+# ============================================================================
+
+model:
+  name: "meta-llama/Llama-3.2-1B-Instruct"
+  output_dir: null          # null = auto-generate timestamped path
+  output_base: "quantized_test"  # base directory for auto-generated paths
+
+calibration:
+  dataset: "openai/gsm8k"
+  dataset_config: "main"    # HuggingFace dataset config name
+  split: "train"
+  num_samples: 256
+  text_column: "question+answer"  # Use "+" to concatenate multiple columns
+  batch_size: 1
+
+quantization:
+  # --- Method selection ---
+  # Available: gptq, awq, qqq
+  quant_method: "gptq"
+
+  # --- Core parameters ---
+  bits: 4                   # 2, 3, 4, or 8
+  group_size: 128           # -1 (per-channel), 16, 32, 64, 128, 256, 512, 1024
+  sym: true                 # Symmetric quantization
+  desc_act: null            # null = let GPTQModel decide; true = descending activation order
+  true_sequential: true     # True sequential quantization
+  lm_head: false            # Quantize the LM head layer
+  mse: 0.0                  # MSE regularization weight (0.0 = disabled)
+  rotation: null            # null, "hadamard", or "random"
+
+  # --- Output format ---
+  # Available: gptq, gptq_v2, marlin, bitblas, qqq, gemm, gemv, gemv_fast, llm_awq
+  format: "gptq"
+
+  # --- Advanced parameters ---
+  damp_percent: null        # Damping percentage for stability
+  damp_auto_increment: null # Auto damping increment during calibration
+  pack_dtype: "int32"       # int32, float16, bfloat16
+  offload_to_disk: true     # Offload intermediate results to disk
+  mock_quantization: false  # Skip actual computation (for testing)
+
+  # --- Dynamic Quantization (per-layer mixed precision) ---
+  # Use regex patterns to match layer names and override quantization params.
+  # Prefix "+:" to include layers, "-:" to exclude layers.
+  # Example:
+  # dynamic:
+  #   "+:.*\\.18\\..*gate.*":    # Match gate layers in block 18
+  #     bits: 8
+  #     group_size: 32
+  #   "-:.*lm_head.*": {}       # Exclude lm_head from quantization
+  dynamic: null
+
+  # --- GPTAQ sub-config (Yale Lab method) ---
+  # Passes dict directly to QuantizeConfig; __post_init__ converts to dataclass.
+  # Example:
+  # gptaq:
+  #   alpha: 0.25
+  gptaq: null
+
+  # --- Other sub-configs ---
+  # Each passes as dict; QuantizeConfig.__post_init__ handles conversion.
+  hessian: null
+  failsafe: null
+  moe: null
+  meta: null

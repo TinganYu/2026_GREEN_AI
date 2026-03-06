@@ -539,6 +539,12 @@ class BaseEvaluator(ABC):
             gen_cfg = GenerationConfig()
             self.model.generation_config = gen_cfg
 
+        # 清除 generation_config 內建的 max_length（預設 20），
+        # 避免每次呼叫 pipeline 時與 max_new_tokens 衝突產生大量警告。
+        # 行為不變：max_new_tokens 本就優先，這裡只是消除噪音。
+        if getattr(gen_cfg, "max_length", None) is not None:
+            gen_cfg.max_length = None
+
         self.generator = TextGenerationPipeline(
             model=self.model,
             tokenizer=self.tokenizer,

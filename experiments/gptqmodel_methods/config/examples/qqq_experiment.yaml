@@ -1,0 +1,32 @@
+# QQQ experiment (Meituan method)
+# QQQ uses a dedicated quantization method and format for improved inference.
+#
+# Previous run (damp_percent=0.005) produced garbage output (0% accuracy).
+# Fix: raise damp_percent to 0.05 (standard GPTQ default) and increase
+# calibration samples for better Hessian estimation.
+
+model:
+  name: "meta-llama/Llama-3.2-1B-Instruct"
+  output_dir: null
+  output_base: "quantized_test"
+
+calibration:
+  dataset: "openai/gsm8k"
+  dataset_config: "main"
+  split: "train"
+  num_samples: 512
+  text_column: "question+answer"
+  batch_size: 1
+
+quantization:
+  quant_method: "qqq"
+  bits: 4
+  group_size: 128
+  sym: true
+  true_sequential: true
+  format: "qqq"
+  pack_dtype: "int32"
+  damp_percent: 0.05
+  damp_auto_increment: 0.01
+  desc_act: true
+  offload_to_disk: true

@@ -5,6 +5,7 @@ gptq_method_2.py
 .env
 quantized_old/
 quantized/
+quantized_test/
 old_results/
 results/llm_optimization
 results/optimization
@@ -16,7 +17,6 @@ Llama*
 *.json
 *.csv
 *.sh
-*.txt
 CLAUDE.md
 gptqmodel_offload/
 docs/

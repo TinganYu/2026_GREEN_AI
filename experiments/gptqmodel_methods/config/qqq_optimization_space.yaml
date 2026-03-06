@@ -1,0 +1,109 @@
+# ============================================================================
+# QQQ 量化參數優化搜索空間配置
+# QQQ Quantization Parameter Optimization Search Space Config
+# ============================================================================
+# QQQ（Accurate Post-Training Quantization with Quantized Computes）
+# 由美團（Meituan）提出的 W4A8 量化方案：
+#   - W4：權重 4-bit 量化
+#   - A8：激活值 8-bit 量化（推理時動態量化）
+#   - 結合了 GPTQ 的 Hessian-based 權重量化 + 激活值量化
+#   - 比純 W4 GPTQ 推理速度更快（A8 利用 INT8 GEMM 硬體加速）
+#
+# ⚠️ 限制事項：
+#   - bits: 固定為 4（QQQ 設計為 W4A8，不支援其他 bits）
+#   - format: 固定為 "qqq"（QQQ 專用格式）
+#   - 相容性較窄：主要透過 GPTQModel 推理，不相容 autoawq/vllm 標準格式
+#
+# QQQ damp_percent 設計說明：
+#   QQQ 的 Hessian 累積做了動態加權歸一化（inp = sqrt(2/n) × inp），
+#   使對角線規模恆定在 O(1)（~2.0）。GPTQ 直接累積規模是 O(n)（~32,000+）。
+#   因此套件預設 damp_percent=0.005 對 QQQ 是合理的（等效絕對阻尼 ≈ 0.01），
+#   與 GPTQ 的 0.05 × 32,000 在各自 Hessian 尺度上意義相近。
+#   damp_auto_increment 同理（0.001 vs GPTQ 的 0.01）。
+#
+# 搜索空間建議 / Suggested search space:
+#   group_size:   [32, 64, 128]
+#   damp_percent: [0.001, 0.005, 0.01]  (套件預設 0.005，建議在此範圍調整)
+#   desc_act:     [true, false]
+#   num_samples:  [256, 512, 1024]  (校準樣本數)
+# ============================================================================
+
+model:
+  name: "meta-llama/Llama-3.2-1B-Instruct"
+  output_dir: null
+  output_base: "quantized_test"
+
+calibration:
+  dataset: "openai/gsm8k"
+  dataset_config: "main"
+  split: "train"
+  # [TUNABLE ⬆] num_samples - 校準樣本數
+  # 影響：Accuracy ⬆ | 量化時間 ⬆
+  # QQQ 需要更多樣本來準確估計激活值分佈（相比純 GPTQ）
+  # 建議範圍：256-1024（前次 0% accuracy 修復後，512 是安全起點）
+  num_samples: 512
+  text_column: "question+answer"
+  batch_size: 1
+
+quantization:
+  quant_method: "qqq"
+
+  # [FIXED] bits - QQQ 固定為 4-bit（W4A8 設計）
+  bits: 4
+
+  # --------------------------------------------------------------------------
+  # [TUNABLE ⬆⬆] group_size - 量化粒度
+  # 影響：Accuracy ⬆⬆ | GPU Memory ⬆ | Latency ⬆
+  #
+  # 32：較細粒度，精度更高，模型稍大
+  # 64：中等平衡
+  # 128：標準選擇  ← 推薦起點
+  #
+  # 搜索空間：[32, 64, 128]
+  # --------------------------------------------------------------------------
+  group_size: 128
+
+  # --------------------------------------------------------------------------
+  # [TUNABLE ⬆⬆] damp_percent - Hessian 阻尼係數
+  # 影響：Accuracy ⬆⬆（穩定性）| GPU Memory ✗ | Latency ✗
+  #
+  # 套件預設：0.005（QQQ Hessian 歸一化後規模 ~2.0，實際阻尼 ≈ 0.01）
+  # 搜索空間：[0.001, 0.005, 0.01]
+  # --------------------------------------------------------------------------
+  damp_percent: 0.005
+
+  # [FIXED] damp_auto_increment - 量化失敗時自動遞增阻尼（套件預設）
+  damp_auto_increment: 0.001
+
+  # --------------------------------------------------------------------------
+  # [TUNABLE ⬆⬆] desc_act - 降序激活量化
+  # 影響：Accuracy ⬆⬆ | GPU Memory ✗ | Latency ✗
+  #
+  # QQQ 的 W4A8 設計中，desc_act 對激活值分佈很重要：
+  # true ：按激活值大小降序排列，對 W4A8 混合精度更有效  ← 推薦
+  # false：標準順序
+  #
+  # 前次 qqq_experiment.yaml 設定為 true，建議保留並比較
+  #
+  # 搜索空間：[true, false]
+  # --------------------------------------------------------------------------
+  desc_act: true
+
+  # ==========================================================================
+  # 以下參數建議固定 / Parameters below are recommended to fix
+  # ==========================================================================
+
+  # [FIXED] sym - QQQ 使用對稱量化
+  sym: true
+
+  # [FIXED] true_sequential - 穩定性最佳
+  true_sequential: true
+
+  # [FIXED] format - QQQ 專用格式，不可更改
+  format: "qqq"
+
+  # [FIXED] pack_dtype - 標準 int32
+  pack_dtype: "int32"
+
+  # [FIXED - 僅影響量化過程] offload_to_disk
+  offload_to_disk: true
