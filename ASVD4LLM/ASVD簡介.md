@@ -37,33 +37,17 @@ $$W \cdot S \approx U \Sigma V^T$$
 `build_asvd_repo.py`：物理構建器。讀取 `asvd.py` 產出的 Rank 配置，將模型權重正式拆解並儲存為新的 HuggingFace Repo。
 
 `modeling_asvd_llama.py`：定義 ASVDLinear 類別，將原本的 nn.Linear 替換為 nn.Sequential(BLinear, ALinear)，實現模型結構的動態轉換。
+### 3.2 檔案結構
+```
+ASVD4LLM-main/
+├─ asvd_tuner.py            ← 超參數優化工具
+├─ asvd.py                  ← 執行 ASVD 實驗
+├─ huggingface_repos/
+│  └─ build_asvd_repo.py    ← 構建 HuggingFace 模型
+└─ asvd_tuning_results.json ← 輸出結果
+└─ output/                  ← 儲存模型位置    
+```
 
-### 3.2 數據流結構
-```
-ASVDAdaptiveTuner (ASVD4LLM-main/asvd_tuner.py)
-   └─ 迴圈執行:
-      ├─ 1. 使用 LLM 建議超參數 (構建包含基準與歷史嘗試紀錄的 Context)
-      │
-      ├─ 2. asvd.py (ASVD4LLM-main/)
-      │    └─ 執行 ASVD 實驗
-      │       ├─ 加載模型
-      │       ├─ 校準數據集
-      │       ├─ 敏感度分析
-      │       └─ 二進制搜索截斷秩
-      │
-      ├─ 3. build_asvd_repo.py (ASVD4LLM-main/huggingface_repos/)
-      │    └─ 構建 HuggingFace 模型
-      │       ├─ 讀取 SVD 緩存
-      │       └─ 保存到 ASVD4LLM-main/output/
-      │
-      ├─ 4. test_eval.py (tmp/test/)
-      │    └─ 評估壓縮模型
-      │       ├─ 加載評估器
-      │       └─ 返回性能指標
-      │
-      └─ 5. 計算綜合分數
-         score = 0.7*accuracy + 0.2*compression + 0.1*ppl
-```
 ## 4. 超參數策略
 ## 模型壓縮與優化參數指南 (針對 GSM8K 任務)
 
@@ -74,7 +58,7 @@ ASVDAdaptiveTuner (ASVD4LLM-main/asvd_tuner.py)
 | **Scaling Method** | fisher | **敏感度指標**。對於數學任務，`fisher` 信息矩陣能比 `abs_mean` 更準確地定位哪些權重對 Loss 影響最大。 |
 | **Calib Dataset** | wikitext2 | **基礎語言特徵保留**。使用通用語料校準，旨在維持模型的語言流暢度與基礎分布，避免壓縮後 PPL (困惑度) 劇烈上升。 |
 
-> **💡 提示：**
+> **提示：**
 > 調整 GSM8K 相關模型時，建議優先固定 `Scaling Method` 為 `fisher`，再微調 `Param Ratio`。如果數學推理邏輯出現明顯胡言亂語，通常是 `Alpha` 值過低導致關鍵神經元被誤刪。
 ## 5. 評分機制 (Score Calculation)
 
@@ -109,7 +93,7 @@ python asvd_tuner.py \
     --accuracy_weight 0.7 \
     --compression_weight 0.2
 ```
-
+[更多asvd_tuner介紹 md](ASVD4LLM-main/ASVD_TUNER_README.md)
 ### 6.2 手動執行模式
 
 如果你已有理想的參數，可以直接執行壓縮流程：
@@ -125,6 +109,15 @@ PYTORCH_ALLOC_CONF='expandable_segments:True' python asvd.py \
     --act_aware --use_cache
 
 * 步驟 2: 構建壓縮模型 Repo
+python huggingface_repos/build_asvd_repo.py \
+    --model_id [你的模型路徑] \
+    --alpha 0.55 \
+    --param_ratio_target 0.8 \
+    --scaling_method fisher \
+    --act_aware --use_cache
+```
+**更新說明：** 本工具已簡化流程，不再需要執行 `asvd.py` 進行預實驗，改為直接調用 `build_asvd_repo.py` 一鍵完成壓縮與 PPL 評估。
+```
 python huggingface_repos/build_asvd_repo.py \
     --model_id [你的模型路徑] \
     --alpha 0.55 \
