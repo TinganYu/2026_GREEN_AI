@@ -1,0 +1,38 @@
+# ============================================================
+# Green_AI 根目錄依賴（Method/ + Evals/ + Global_Tuner_v2/）
+# ============================================================
+#
+# 安裝順序（GPTQModel 需要先裝 torch + CUDA）：
+#   1. pip install torch --index-url https://download.pytorch.org/whl/cu128
+#   2. pip install -v gptqmodel --no-build-isolation --force-reinstall --no-cache-dir
+#   3. pip install -r requirements.txt
+#
+# Step 2 必須加 --no-build-isolation，否則 AWQ/QQQ CUDA kernel 無法編譯。
+
+# ── Core ────────────────────────────────────────────────────
+torch                    # 需先手動安裝 cu128 版
+transformers
+datasets
+accelerate
+safetensors
+pyyaml
+python-dotenv
+
+# ── Quantization ─────────────────────────────────────────────
+gptqmodel                # GPTQ / AWQ / QQQ（需 --no-build-isolation）
+llmcompressor            # Method/sparse.py：SparseGPT
+
+# ── Evaluation ───────────────────────────────────────────────
+evaluate
+numpy
+codecarbon               # CO2 排放追蹤
+human-eval               # HumanEval 程式碼生成評測
+lm_eval                  # ASVD PPL 評估（ASVD4LLM 依賴）
+
+# ── Global_Tuner_v2 / LLM Agent ──────────────────────────────
+openai                   # LLM 決策（GPT-4o）
+pydantic                 # schemas.py StrategySuggestion
+
+# ── Optional：BitBLAS format（gptqmodel marlin 替代方案）───────
+# bitblas
+# thefuzz

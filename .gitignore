@@ -10,6 +10,7 @@ old_results/
 results/llm_optimization
 results/optimization
 results/*.txt
+tuning_results/
 test.ipynb
 test.py
 Llama*

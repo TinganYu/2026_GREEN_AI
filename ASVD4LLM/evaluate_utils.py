@@ -9,8 +9,12 @@ torch.serialization.add_safe_globals([
     tokenizers.Encoding
 ])
 from datautils import get_eval_loaders
-from lm_eval.base import BaseLM
-from lm_eval import evaluator
+try:
+    from lm_eval.base import BaseLM      # lm_eval 0.3.x
+    from lm_eval import evaluator
+except ImportError:
+    BaseLM = object                      # lm_eval 0.4.x 移除了 base 模組；eval_ppl="" 時不使用
+    evaluator = None
 from datasets import load_dataset
 import time
 import re
