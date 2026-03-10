@@ -449,3 +449,34 @@ class BaseEvaluator(ABC):
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(results, f, ensure_ascii=False, indent=2)
         logger.info(f"結果已儲存: {output_path}")
+
+    def unload_model(self):
+        """徹底卸載模型並清除 GPU 記憶體 (Unload model and clear GPU memory)"""
+        logger.info("開始卸載模型並清除 VRAM...")
+        
+        # 1. Delete the pipeline and model objects
+        if self.generator is not None:
+            del self.generator
+            self.generator = None
+            
+        if self.model is not None:
+            del self.model
+            self.model = None
+            
+        if self.tokenizer is not None:
+            del self.tokenizer
+            self.tokenizer = None
+
+        # 2. Force Python's Garbage Collector
+        import gc
+        gc.collect()
+
+        # 3. Force PyTorch to empty the CUDA cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
+            # 4. Reset peak memory stats so the next iteration starts fresh
+            torch.cuda.reset_peak_memory_stats()
+            
+        self._use_vllm = False
+        logger.info("模型已成功卸載，VRAM 已清除。")

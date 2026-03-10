@@ -3,13 +3,14 @@ import gc
 import shutil
 import torch
 import json
+import yaml
 from datetime import datetime
 from pathlib import Path
 import argparse
 from llm_client import LLMDecisionMaker
 from executors import run_asvd, run_sparse, run_quantization, run_evaluation
 from utils import get_pareto_frontier
-
+from Evals.base_evaluator import BaseEvaluator
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ModularOrchestrator")
 
@@ -86,41 +87,143 @@ class OptimizationOrchestrator:
         self._baseline_cache_dir.mkdir(parents=True, exist_ok=True)
         self._baseline_cache_path = self._baseline_cache_dir / f"{model_name}_{task_str}.json"
 
+    def _parse_requested_tasks(self) -> list:
+        if isinstance(self.task, str):
+            return [t.strip() for t in self.task.split(",") if t.strip()]
+        return [str(t).strip() for t in self.task if str(t).strip()]
+
+    def _is_same_num_samples(self, cached_samples) -> bool:
+        """baseline 可重用條件：num_samples 必須完全相同（含 None）。"""
+        return cached_samples == self.num_samples
+
+    def _aggregate_details(self, requested_tasks: list, details: dict) -> dict:
+        n = len(requested_tasks)
+        if n == 0:
+            return {"accuracy": 0.0, "latency": 0.0, "vram": 0.0, "emissions": 0.0}
+
+        total_acc = sum(details[t].get("accuracy", 0.0) for t in requested_tasks)
+        total_lat = sum(details[t].get("latency", 0.0) for t in requested_tasks)
+        total_emit = sum(details[t].get("emissions", 0.0) for t in requested_tasks)
+        max_vram = max(details[t].get("vram", 0.0) for t in requested_tasks)
+
+        return {
+            "accuracy": total_acc / n,
+            "latency": total_lat / n,
+            "vram": max_vram,
+            "emissions": total_emit / n,
+        }
+
+    def _load_task_detail_from_result_file(self, task_name: str) -> dict:
+        """嘗試從 baseline 單一 task 結果檔讀取可重用指標。"""
+        model_name = Path(self.model_id).name
+        result_path = self._baseline_cache_dir / model_name / f"{task_name}_results.json"
+        if not result_path.exists():
+            return None
+
+        try:
+            with open(result_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception as e:
+            logger.warning(f"讀取 baseline task 檔失敗 {result_path}: {e}")
+            return None
+
+        cached_samples = raw.get("num_samples")
+        if self.num_samples is None:
+            default_samples = None
+            config_path = _ROOT_DIR / "Evals" / "config" / "dataset_config.yaml"
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    dataset_cfg = yaml.safe_load(f) or {}
+                task_cfg = dataset_cfg.get(task_name, {})
+                default_samples = task_cfg.get("num_samples")
+            except Exception as e:
+                logger.warning(f"讀取 dataset_config.yaml 失敗 {config_path}: {e}")
+
+            if cached_samples != default_samples:
+                logger.info(
+                    f"baseline task {task_name} 樣本數不符 dataset 預設，"
+                    f"cached={cached_samples}, default={default_samples}"
+                )
+                return None
+        elif not self._is_same_num_samples(cached_samples):
+            return None
+
+        return {
+            "accuracy": raw.get("accuracy", raw.get("pass@1", 0.0)),
+            "latency": raw.get("total_generation_time_sec", 0.0),
+            "vram": raw.get("gpu_peak_mb", 0.0) / 1024.0,
+            "emissions": raw.get("emissions_kg_co2", 0.0),
+        }
+
     def _load_or_run_baseline(self) -> dict:
         """載入快取的 baseline，若不存在則重新評估並快取。"""
+        requested_tasks = self._parse_requested_tasks()
+        reused_details = {}
+
         if self._baseline_cache_path.exists():
             with open(self._baseline_cache_path, "r", encoding="utf-8") as f:
                 cached = json.load(f)
-            # 快取的 num_samples 必須 >= 當前設定才可重用
-            cached_samples = cached.get("num_samples")
-            if cached_samples is None or self.num_samples is None or cached_samples >= self.num_samples:
-                logger.info(f"使用快取 baseline: {self._baseline_cache_path}")
-                logger.info(f"  accuracy={cached['accuracy']:.4f}, latency={cached['latency']:.4f}s, "
-                            f"vram={cached['vram']:.4f}GB, emissions={cached['emissions']:.6f}kg CO2")
-                return cached
 
-        logger.info("--- 計算基線指標（無快取，重新評估）---")
-        results = run_evaluation(
-            self.base_model_path, self.task,
-            weights=self.weights, baseline_metrics=None,
-            num_samples=self.num_samples,
-            output_dir=str(self._baseline_cache_dir),
-        )
-        # 存入快取
+            cached_samples = cached.get("num_samples")
+            cached_details = cached.get("details") if isinstance(cached.get("details"), dict) else {}
+
+            if self._is_same_num_samples(cached_samples):
+                reused_details = {
+                    task: cached_details[task]
+                    for task in requested_tasks
+                    if task in cached_details
+                }
+
+                if len(reused_details) == len(requested_tasks):
+                    logger.info(f"使用快取 baseline: {self._baseline_cache_path}")
+                    logger.info(f"  accuracy={cached['accuracy']:.4f}, latency={cached['latency']:.4f}s, "
+                                f"vram={cached['vram']:.4f}GB, emissions={cached['emissions']:.6f}kg CO2")
+                    return cached
+            else:
+                logger.info("baseline 快取 num_samples 不一致，將只重用可匹配的 task 檔並補算缺少 task。")
+
+        # 若完整 cache 不足，嘗試從既有 task 結果檔補齊（可支援新增 task 的情境）
+        missing_tasks = [task for task in requested_tasks if task not in reused_details]
+        recovered = 0
+        for task in list(missing_tasks):
+            detail = self._load_task_detail_from_result_file(task)
+            if detail is not None:
+                reused_details[task] = detail
+                recovered += 1
+
+        missing_tasks = [task for task in requested_tasks if task not in reused_details]
+        if recovered:
+            logger.info(f"已從既有 baseline task 結果重用 {recovered} 個 task。")
+
+        if missing_tasks:
+            logger.info(f"baseline 尚缺 task，將僅評估: {missing_tasks}")
+            eval_results = run_evaluation(
+                self.base_model_path,
+                ",".join(missing_tasks),
+                weights=self.weights,
+                baseline_metrics=None,
+                num_samples=self.num_samples,
+                output_dir=str(self._baseline_cache_dir),
+            )
+            reused_details.update(eval_results.get("details", {}))
+        else:
+            logger.info("baseline 所有 task 都可重用，無需重新評估。")
+
+        aggregate = self._aggregate_details(requested_tasks, reused_details)
         cache_entry = {
             "model_id": self.model_id,
             "task": self.task,
-            "num_samples": self.num_samples,   # 用於判斷快取是否足夠
-            "accuracy": results["accuracy"],
-            "latency": results["latency"],
-            "vram": results["vram"],
-            "emissions": results["emissions"],
-            "details": results.get("details", {}),
+            "num_samples": self.num_samples,
+            "accuracy": aggregate["accuracy"],
+            "latency": aggregate["latency"],
+            "vram": aggregate["vram"],
+            "emissions": aggregate["emissions"],
+            "details": {task: reused_details[task] for task in requested_tasks},
         }
         with open(self._baseline_cache_path, "w", encoding="utf-8") as f:
             json.dump(cache_entry, f, indent=2, ensure_ascii=False)
         logger.info(f"基線已快取至: {self._baseline_cache_path}")
-        return results
+        return cache_entry
 
     def optimize(self):
         self.baseline_metrics = self._load_or_run_baseline()
@@ -192,6 +295,7 @@ class OptimizationOrchestrator:
                     "trial_name": trial_name,
                 })
                 self.save_history()
+                BaseEvaluator.unload_model()
                 continue
 
             trial_dirs.append(trial_dir)
@@ -209,6 +313,11 @@ class OptimizationOrchestrator:
                     src.rmdir()
                     current_model = trial_dir
                     logger.info(f"已將模型搬移至 trial_dir: {trial_dir}")
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
 
             # Step 4: 評估
             # output_dir=exp_dir，評估器內部會 append Path(current_model).name = trial_name
@@ -237,6 +346,7 @@ class OptimizationOrchestrator:
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+
 
         # 最終報告
         self._print_summary()

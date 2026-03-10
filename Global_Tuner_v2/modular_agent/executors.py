@@ -124,7 +124,28 @@ def _load_model_for_eval(model_path: str):
         )
     else:
         from transformers import AutoModelForCausalLM
-        logger.info(f"使用 AutoModelForCausalLM 載入: {model_path}")
+        import json
+        config_path = Path(model_path) / "config.json"
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+                
+                # Check if it is a pure sparse model with the buggy 'compressed-tensors' config
+                q_config = config_data.get("quantization_config", {})
+                if q_config.get("quant_method") == "compressed-tensors" and "sparsity_config" in q_config:
+                    # If it has sparsity but no actual weight quantization (config_groups), delete the block
+                    if "config_groups" not in q_config:
+                        print(f"🔧 Fixing config.json: Removing buggy quantization_config to prevent transformers crash.")
+                        del config_data["quantization_config"]
+                        
+                        # Save the cleaned config back to the file
+                        with open(config_path, "w", encoding="utf-8") as f:
+                            json.dump(config_data, f, indent=2)
+            except Exception as e:
+                print(f"⚠️ Failed to clean config.json: {e}")
+            logger.info(f"使用 AutoModelForCausalLM 載入: {model_path}")
+            
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
             device_map={"": "cuda:0"},
@@ -263,6 +284,7 @@ def run_evaluation(model_path: str, tasks, weights: dict, baseline_metrics: dict
     avg_emit = total_emit / n if n else 0.0
 
     if not baseline_metrics:
+        evaluator.unload_model()
         return {
             "accuracy": avg_acc, "latency": avg_lat, "vram": max_vram, "emissions": avg_emit,
             "score": 1.0,
@@ -286,7 +308,7 @@ def run_evaluation(model_path: str, tasks, weights: dict, baseline_metrics: dict
         weights.get("vram", 0.0) * norm_vram +
         weights.get("emit", 0.0) * norm_emit
     )
-
+    evaluator.unload_model()
     return {
         "accuracy": avg_acc, "latency": avg_lat, "vram": max_vram, "emissions": avg_emit,
         "score": final_score,

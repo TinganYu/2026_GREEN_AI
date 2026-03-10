@@ -142,6 +142,7 @@ Pareto Frontier (best trade-offs found):
 - Later iterations: combine methods in hybrid mode.
 - NEVER repeat identical configs. Use Pareto frontier to find unexplored trade-off regions.
 
+
 Output ONLY the JSON for your chosen mode (copy and fill one template above). No extra fields, no prose.
 """
 
