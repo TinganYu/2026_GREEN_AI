@@ -130,7 +130,7 @@ OUTPUT FORMAT:
 }}
 
 === CURRENT STATUS ===
-Trial History (last 5):
+Trial History :
 {history_str}
 
 Pareto Frontier (best trade-offs found):
