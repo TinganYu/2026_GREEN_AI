@@ -3,7 +3,7 @@ import json
 from openai import OpenAI
 from dotenv import load_dotenv
 from pathlib import Path
-from .schemas import StrategySuggestion
+from schemas import StrategySuggestion
 
 # Load environment variables
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
@@ -44,8 +44,8 @@ class LLMDecisionMaker:
 
     def _create_prompt(self, iteration: int, trial_history: list, pareto: list = None,
                        weights: dict = None) -> str:
-        recent_history = trial_history[-5:] if len(trial_history) > 5 else trial_history
-        history_str = self._format_history(recent_history)
+        # recent_history = trial_history[-5:] if len(trial_history) > 5 else trial_history
+        history_str = self._format_history(trial_history)
         pareto_str = self._format_history(pareto) if pareto else "None"
 
         w = weights or {}
@@ -156,13 +156,46 @@ Output ONLY the JSON for your chosen mode (copy and fill one template above). No
                        weights: dict = None):
         """
         Returns (suggestion: StrategySuggestion, raw_llm_output: dict)
-        raw_llm_output 是 LLM 原始輸出（未填入 pydantic 預設值），用於記錄。
+        raw_llm_output is the raw LLM output (without pydantic defaults), used for logging.
         """
-        response = self.client.chat.completions.create(
-            model=self.llm_model,
-            messages=[{"role": "user", "content": self._create_prompt(iteration, trial_history,
-                                                                       pareto=pareto, weights=weights)}],
-            response_format={"type": "json_object"}
-        )
-        raw = self._strip_json_comments(response.choices[0].message.content)
-        return StrategySuggestion.model_validate_json(raw), json.loads(raw)
+        import json
+        from pydantic import ValidationError
+        import logging
+        
+        logger = logging.getLogger("LLMClient")
+        max_retries = 3
+        
+        # FIXED: Added weights parameter back in
+        prompt = self._create_prompt(iteration, trial_history, pareto=pareto, weights=weights)
+        messages = [{"role": "user", "content": prompt}]
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.llm_model,
+                    messages=messages,
+                    response_format={"type": "json_object"}
+                )
+                
+                # FIXED: Strip comments to prevent json.loads from crashing
+                raw_content = self._strip_json_comments(response.choices[0].message.content)
+                
+                # Attempt to validate the JSON against our strict Literal rules
+                suggestion = StrategySuggestion.model_validate_json(raw_content)
+                
+                # FIXED: Return the exact tuple specified in the docstring
+                return suggestion, json.loads(raw_content)
+                
+            except ValidationError as e:
+                logger.warning(f"⚠️ LLM Validation failed on attempt {attempt + 1}/{max_retries}. Retrying...\nError: {e}")
+                
+                if attempt == max_retries - 1:
+                    logger.error("Max retries reached. LLM failed to produce valid JSON.")
+                    raise # Crash loudly if it fails 3 times so you know something is broken
+                
+                # Feed the error back to the LLM so it can learn and correct itself
+                messages.append({"role": "assistant", "content": raw_content})
+                messages.append({
+                    "role": "user", 
+                    "content": f"Your JSON failed Pydantic validation. Please fix the following errors and strictly follow the schema:\n{e}"
+                })

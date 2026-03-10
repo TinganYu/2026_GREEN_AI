@@ -6,9 +6,9 @@ import json
 from datetime import datetime
 from pathlib import Path
 import argparse
-from .llm_client import LLMDecisionMaker
-from .executors import run_asvd, run_sparse, run_quantization, run_evaluation
-from .utils import get_pareto_frontier
+from llm_client import LLMDecisionMaker
+from executors import run_asvd, run_sparse, run_quantization, run_evaluation
+from utils import get_pareto_frontier
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ModularOrchestrator")
@@ -115,6 +115,7 @@ class OptimizationOrchestrator:
             "latency": results["latency"],
             "vram": results["vram"],
             "emissions": results["emissions"],
+            "details": results.get("details", {}),
         }
         with open(self._baseline_cache_path, "w", encoding="utf-8") as f:
             json.dump(cache_entry, f, indent=2, ensure_ascii=False)
@@ -133,6 +134,16 @@ class OptimizationOrchestrator:
 
         for i in range(1, self.max_iterations + 1):
             logger.info(f"\n===== Iteration {i} =====")
+            
+            # Check available memory before each iteration
+            import psutil
+            import time
+            mem = psutil.virtual_memory()
+            if mem.percent > 90:
+                logger.warning(f"⚠️  Memory usage high ({mem.percent}%), cleaning up...")
+                gc.collect()
+                torch.cuda.empty_cache()
+                time.sleep(5)
 
             # Step 1: LLM 決策
             pareto = get_pareto_frontier(self.trial_history)
@@ -281,6 +292,7 @@ class OptimizationOrchestrator:
                 "latency": self.baseline_metrics.get("latency"),
                 "vram": self.baseline_metrics.get("vram"),
                 "emissions": self.baseline_metrics.get("emissions"),
+                "details": self.baseline_metrics.get("details", {}),
             },
         }
         path = self.exp_dir / "experiment_config.json"
@@ -317,10 +329,10 @@ if __name__ == "__main__":
     parser.add_argument("--max_iterations", type=int, default=10)
     parser.add_argument("--num_samples", type=int, default=None,
                         help="每個 dataset 的評估樣本數（None = 全部）")
-    parser.add_argument("--acc_weight", type=float, default=0.7)
+    parser.add_argument("--acc_weight", type=float, default=0.6)
     parser.add_argument("--lat_weight", type=float, default=0.1)
-    parser.add_argument("--vram_weight", type=float, default=0.2)
-    parser.add_argument("--emit_weight", type=float, default=0.0)
+    parser.add_argument("--vram_weight", type=float, default=0.1)
+    parser.add_argument("--emit_weight", type=float, default=0.2)
     parser.add_argument("--no-cleanup", dest="cleanup", action="store_false",
                         help="跑完後不刪除 trial 模型（預設：刪除）")
     parser.add_argument("--no-keep-best", dest="keep_best", action="store_false",

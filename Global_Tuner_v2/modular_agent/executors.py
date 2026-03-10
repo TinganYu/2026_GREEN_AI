@@ -232,7 +232,7 @@ def run_evaluation(model_path: str, tasks, weights: dict, baseline_metrics: dict
             results = evaluator.evaluate()
             evaluator.save_results(results)
 
-            acc = results.get("accuracy", 0.0)
+            acc = results.get("accuracy", results.get('pass@1', 0.0))
             lat = results.get("total_generation_time_sec", 0.0)
             vram = results.get("gpu_peak_mb", 0.0) / 1024.0
             emit = results.get("emissions_kg_co2", 0.0)

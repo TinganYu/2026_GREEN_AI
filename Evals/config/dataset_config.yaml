@@ -31,7 +31,7 @@ gsm8k:
   dataset_name: "openai/gsm8k"
   dataset_config: "main"
   dataset_split: "test"
-  num_samples: 50  # null 表示全部
+  num_samples: 1319  # null 表示全部 1319
   
   # 生成參數
   max_new_tokens: 256
@@ -80,7 +80,7 @@ truthfulqa:
   dataset_name: "truthful_qa"
   dataset_config: "multiple_choice"   # generation, multiple_choice
   dataset_split: "validation"
-  num_samples: 100
+  num_samples: 817
   
   # 生成參數
   max_new_tokens: 128
@@ -101,7 +101,7 @@ commonsenseqa:
   # 資料集參數
   dataset_name: "tau/commonsense_qa"
   dataset_split: "validation"
-  num_samples: 100
+  num_samples: 1221  # 最多1221
   
   # 生成參數
   max_new_tokens: 128
@@ -153,7 +153,7 @@ humaneval:
   # 資料集參數
   dataset_name: "openai_humaneval"
   dataset_split: "test"
-  num_samples: 3  # HumanEval 固定 164 題
+  num_samples: 164  # HumanEval 固定 164 題
   
   # 生成參數
   max_new_tokens: 1024
