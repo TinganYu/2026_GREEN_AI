@@ -11,11 +11,43 @@ from llm_client import LLMDecisionMaker
 from executors import run_asvd, run_sparse, run_quantization, run_evaluation
 from utils import get_pareto_frontier
 from Evals.base_evaluator import BaseEvaluator
+import multiprocessing as mp
+import traceback
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ModularOrchestrator")
 
 _ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+# ============================================================================
+# PROCESS ISOLATION WRAPPER
+# ============================================================================
+def _worker(queue, func, *args, **kwargs):
+    """Worker function that executes the target function and captures the result."""
+    try:
+        result = func(*args, **kwargs)
+        queue.put({"status": "success", "result": result})
+    except Exception as e:
+        queue.put({"status": "error", "error": str(e), "traceback": traceback.format_exc()})
 
+def run_isolated(func, *args, **kwargs):
+    """
+    Runs a function in a completely isolated process using the 'spawn' context.
+    This guarantees that the OS will wipe 100% of the allocated VRAM when the function finishes.
+    """
+    ctx = mp.get_context('spawn')
+    queue = ctx.Queue()
+    p = ctx.Process(target=_worker, args=(queue, func) + args, kwargs=kwargs)
+    p.start()
+    p.join()
+
+    if not queue.empty():
+        res = queue.get()
+        if res["status"] == "success":
+            return res["result"]
+        else:
+            raise RuntimeError(f"Isolated process failed: {res['error']}\n{res['traceback']}")
+    else:
+        raise RuntimeError("Process died unexpectedly (likely killed by OS Out-Of-Memory).")
+# ============================================================================
 
 def _make_trial_name(i: int, suggestion) -> str:
     """生成 trial 目錄名稱，包含編號、方法與關鍵參數"""
@@ -197,7 +229,16 @@ class OptimizationOrchestrator:
 
         if missing_tasks:
             logger.info(f"baseline 尚缺 task，將僅評估: {missing_tasks}")
-            eval_results = run_evaluation(
+            # eval_results = run_evaluation(
+            #     self.base_model_path,
+            #     ",".join(missing_tasks),
+            #     weights=self.weights,
+            #     baseline_metrics=None,
+            #     num_samples=self.num_samples,
+            #     output_dir=str(self._baseline_cache_dir),
+            # )
+            eval_results = run_isolated(
+                run_evaluation,
                 self.base_model_path,
                 ",".join(missing_tasks),
                 weights=self.weights,
@@ -274,16 +315,27 @@ class OptimizationOrchestrator:
 
             try:
                 if has_sparse:
-                    # 若後面還有其他步驟，存到子目錄；否則直接存到 trial_dir
                     sparse_out = trial_dir if (not has_asvd and not has_quant) else str(Path(trial_dir) / "sparse")
-                    current_model = run_sparse(current_model, suggestion, output_dir=sparse_out)
+                    current_model = run_isolated(run_sparse, current_model, suggestion, output_dir=sparse_out)
 
                 if has_asvd:
                     asvd_out = trial_dir if not has_quant else str(Path(trial_dir) / "asvd")
-                    current_model = run_asvd(current_model, suggestion, output_dir=asvd_out)
+                    current_model = run_isolated(run_asvd, current_model, suggestion, output_dir=asvd_out)
 
                 if has_quant:
-                    current_model = run_quantization(current_model, suggestion, output_dir=trial_dir)
+                    current_model = run_isolated(run_quantization, current_model, suggestion, output_dir=trial_dir)
+            # try:
+                # if has_sparse:
+                #     # 若後面還有其他步驟，存到子目錄；否則直接存到 trial_dir
+                #     sparse_out = trial_dir if (not has_asvd and not has_quant) else str(Path(trial_dir) / "sparse")
+                #     current_model = run_sparse(current_model, suggestion, output_dir=sparse_out)
+
+                # if has_asvd:
+                #     asvd_out = trial_dir if not has_quant else str(Path(trial_dir) / "asvd")
+                #     current_model = run_asvd(current_model, suggestion, output_dir=asvd_out)
+
+                # if has_quant:
+                #     current_model = run_quantization(current_model, suggestion, output_dir=trial_dir)
 
             except Exception as e:
                 logger.error(f"壓縮失敗 (iteration {i}): {e}")
@@ -294,8 +346,10 @@ class OptimizationOrchestrator:
                     "metrics": {"score": 0.0}, "model_path": None, "error": str(e),
                     "trial_name": trial_name,
                 })
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 self.save_history()
-                BaseEvaluator.unload_model()
                 continue
 
             trial_dirs.append(trial_dir)
@@ -322,7 +376,15 @@ class OptimizationOrchestrator:
             # Step 4: 評估
             # output_dir=exp_dir，評估器內部會 append Path(current_model).name = trial_name
             # → 結果存到 exp_dir/trial_name/ = trial_dir/
-            metrics = run_evaluation(
+            # metrics = run_evaluation(
+            #     current_model, self.task,
+            #     weights=self.weights,
+            #     baseline_metrics=self.baseline_metrics,
+            #     num_samples=self.num_samples,
+            #     output_dir=str(self.exp_dir),
+            # )
+            metrics = run_isolated(
+                run_evaluation,
                 current_model, self.task,
                 weights=self.weights,
                 baseline_metrics=self.baseline_metrics,

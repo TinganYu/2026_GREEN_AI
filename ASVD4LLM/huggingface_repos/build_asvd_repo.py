@@ -241,6 +241,10 @@ def main(args):
     
     del model
     del tokenizer
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     if args.push:
         # load
         hub_name = model_id.split("/")[-1] + f"-asvd{int(args.param_ratio_target*100)}"
