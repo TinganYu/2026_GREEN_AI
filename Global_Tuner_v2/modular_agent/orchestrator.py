@@ -299,6 +299,8 @@ class OptimizationOrchestrator:
             trial_name = _make_trial_name(i, suggestion)
             trial_dir = str(self.exp_dir / trial_name)
             Path(trial_dir).mkdir(parents=True, exist_ok=True)
+            # 只要 trial 目錄被建立，就納入清理清單；避免壓縮失敗時遺留空目錄
+            trial_dirs.append(trial_dir)
             logger.info(f"Trial 目錄: {trial_dir}")
 
             # Step 3: 執行壓縮
@@ -351,8 +353,6 @@ class OptimizationOrchestrator:
                     torch.cuda.empty_cache()
                 self.save_history()
                 continue
-
-            trial_dirs.append(trial_dir)
 
             # 確保評估時 current_model 的名稱 == trial_name
             # 否則評估器會用錯誤子目錄名（例如 BNB on-the-fly 後 current_model 仍是 trial_dir/asvd）
