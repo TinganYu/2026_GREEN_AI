@@ -42,7 +42,6 @@ class QuantConfig:
     bits: int = 4
     group_size: int = 128
     format: str = "gptq"       # GPTQModel format（gptq / gemm / marlin / qqq …）
-    desc_act: bool = False
     damp_percent: float = 0.05
     mse: float = 0.0
     sym: bool = True
@@ -141,7 +140,6 @@ def _run_gptqmodel(model_path: str, config: QuantConfig) -> str:
         bits=config.bits,
         group_size=config.group_size,
         format=FORMAT_MAP[format_str],
-        desc_act=config.desc_act,
         damp_percent=config.damp_percent,
         mse=config.mse,
         sym=config.sym,

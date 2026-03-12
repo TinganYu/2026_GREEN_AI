@@ -90,7 +90,6 @@ def run_quantization(model_path: str, suggestion, output_dir: Optional[str] = No
         bits=suggestion.quant_bits,
         group_size=suggestion.quant_group_size or 128,
         format=fmt,
-        desc_act=suggestion.desc_act or False,
         damp_percent=suggestion.damp_percent or 0.05,
         mse=suggestion.mse or 0.0,
         quant_type=suggestion.quant_type or "nf4",

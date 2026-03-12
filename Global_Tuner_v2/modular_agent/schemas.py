@@ -29,8 +29,6 @@ class StrategySuggestion(BaseModel):
                                   description="GPTQ:[-1,16,32,64,128,256] | AWQ:[16,32,64,128] | QQQ:[-1,128]")
     quant_format: str = Field(default="gptq",
                               description="GPTQ:[gptq,gptq_v2] | AWQ:自動gemm | QQQ:自動qqq")
-    desc_act: bool = Field(default=False,
-                           description="GPTQ bits≤3 建議 true；AWQ 無效")
     damp_percent: float = Field(default=0.05,
                                 description="GPTQ:[0.005,0.01,0.05,0.1] | QQQ:[0.001,0.005,0.01]")
     mse: float = Field(default=0.0,
@@ -67,13 +65,11 @@ class StrategySuggestion(BaseModel):
             if self.quant_method == "gptq":
                 d["quant"].update({
                     "format": self.quant_format,
-                    "desc_act": self.desc_act,
                     "damp": self.damp_percent,
                     "mse": self.mse,
                 })
             elif self.quant_method == "qqq":
                 d["quant"].update({
-                    "desc_act": self.desc_act,
                     "damp": self.damp_percent,
                 })
             elif self.quant_method == "bnb":

@@ -76,7 +76,6 @@ OUTPUT FORMAT:
   "quant_bits": 4,        // [2,3,4,8]; lower = smaller model but more accuracy loss
   "quant_group_size": 128, // [32,64,128,256]; smaller = more accurate but larger file; -1 = per-channel (fastest, lowest accuracy)
   "quant_format": "gptq", // [gptq, gptq_v2]; gptq_v2 slightly better accuracy; marlin/bitblas FAIL — do NOT use
-  "desc_act": false,      // Reorder weight columns by activation magnitude before quantizing. Helps preserve key weights. Set true ONLY when bits<=3 (otherwise <0.5% effect)
   "damp_percent": 0.05,   // Hessian dampening [0.005, 0.01, 0.05, 0.1]; 0.05 is safe default, 0.01 more aggressive
   "mse": 0.0              // MSE regularization in loss [0.0, 0.01, 0.05, 0.1]; 0.0 = standard GPTQ; >0 may slightly improve accuracy
 }}
@@ -91,7 +90,6 @@ OUTPUT FORMAT:
 OUTPUT FORMAT:
 {{"reasoning": "...", "mode": "quant_only", "quant_method": "qqq",
   "quant_group_size": 128, // kernel supports ONLY [-1, 128]; -1=per-channel (no grouping, fastest, lowest accuracy), 128=standard
-  "desc_act": true,        // Recommended true for W4A8 (more important than in GPTQ)
   "damp_percent": 0.005    // [0.001, 0.005, 0.01]; NOTE: QQQ Hessian scale is ~2.0 vs GPTQ ~32000, so default 0.005 here ≈ 0.05 in GPTQ
 }}
 
