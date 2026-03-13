@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional
 
 
@@ -39,6 +39,12 @@ class StrategySuggestion(BaseModel):
                             description="BNB 專用：[nf4, fp4]")
     use_double_quant: bool = Field(default=False,
                                    description="BNB 專用：雙重量化節省 VRAM")
+
+    @model_validator(mode="after")
+    def _fix_bnb_double_quant(self):
+        if self.quant_method == "bnb" and self.quant_bits != 4:
+            self.use_double_quant = False
+        return self
 
     def to_log_dict(self):
         d = {"mode": self.mode}

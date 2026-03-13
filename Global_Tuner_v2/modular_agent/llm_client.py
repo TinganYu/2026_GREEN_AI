@@ -121,12 +121,6 @@ OUTPUT FORMAT:
   "quant_method": "bnb", "quant_bits": 4, "use_double_quant": false
 }}
 
-[MODE: hybrid / Sparse+Quant] Apply SparseGPT first, then quantization.
-OUTPUT FORMAT:
-{{"reasoning": "...", "mode": "hybrid", "sparsity_structure": "unstructured", "sparsity_ratio": 0.4,
-  "quant_method": "gptq", "quant_bits": 4, "quant_group_size": 128, "quant_format": "gptq"
-}}
-
 === CURRENT STATUS ===
 Trial History :
 {history_str}

@@ -100,6 +100,7 @@ class OptimizationOrchestrator:
         self.cleanup = cleanup
         self.keep_best = keep_best
         self.trial_history = []
+        self._seen_configs: set = set()
         self.llm = LLMDecisionMaker(model_id, task, max_iterations)
         self.best_score = -float('inf')
         self.best_result = None
@@ -289,10 +290,30 @@ class OptimizationOrchestrator:
                 torch.cuda.empty_cache()
                 time.sleep(5)
 
-            # Step 1: LLM 決策
+            # Step 1: LLM 決策（含去重重試）
             pareto = get_pareto_frontier(self.trial_history)
-            suggestion, llm_output = self.llm.get_suggestion(i, self.trial_history, pareto=pareto,
-                                                              weights=self.weights)
+            _MAX_DUP_RETRIES = 3
+            suggestion, llm_output = None, None
+            for _retry in range(_MAX_DUP_RETRIES):
+                _s, _raw = self.llm.get_suggestion(i, self.trial_history, pareto=pareto, weights=self.weights)
+                _fp = self._config_fingerprint(_s)
+                if _fp not in self._seen_configs:
+                    suggestion, llm_output = _s, _raw
+                    self._seen_configs.add(_fp)
+                    break
+                logger.warning(f"[去重] LLM 建議重複 config (retry {_retry+1}/{_MAX_DUP_RETRIES})")
+            else:
+                logger.warning(f"Iteration {i}: LLM 無法產生新 config，跳過")
+                self.trial_history.append({
+                    "iteration": i, "config": None,
+                    "suggestion": None,
+                    "metrics": {"score": 0.0}, "model_path": None,
+                    "error": "重複 config，已跳過",
+                    "trial_name": f"trial_{i:03d}_skipped",
+                })
+                self.save_history()
+                continue
+
             logger.info(f"建議: {suggestion.mode} | 理由: {suggestion.reasoning}")
 
             # Step 2: 建立 trial 目錄
@@ -486,6 +507,10 @@ class OptimizationOrchestrator:
         elif isinstance(data, (Path, torch.device)):
             return str(data)
         return data
+
+    @staticmethod
+    def _config_fingerprint(suggestion) -> str:
+        return json.dumps(suggestion.to_log_dict(), sort_keys=True, ensure_ascii=False)
 
     def _update_best(self, result):
         if result['metrics']['score'] > self.best_score:

@@ -20,6 +20,7 @@ python-dotenv
 
 # ── Quantization ─────────────────────────────────────────────
 gptqmodel                # GPTQ / AWQ / QQQ（需 --no-build-isolation）
+bitsandbytes             # BNB 量化（4-bit / 8-bit）
 llmcompressor            # Method/sparse.py：SparseGPT
 
 # ── Evaluation ───────────────────────────────────────────────
@@ -32,6 +33,9 @@ lm_eval                  # ASVD PPL 評估（ASVD4LLM 依賴）
 # ── Global_Tuner_v2 / LLM Agent ──────────────────────────────
 openai                   # LLM 決策（GPT-4o）
 pydantic                 # schemas.py StrategySuggestion
+
+# ── Systematic_Tuner / Grid & Algo Search ────────────────────
+optuna                   # 演算法搜尋（TPE、NSGA-II、Random）
 
 # ── Optional：BitBLAS format（gptqmodel marlin 替代方案）───────
 # bitblas
