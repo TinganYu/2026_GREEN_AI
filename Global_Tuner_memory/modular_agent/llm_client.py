@@ -47,30 +47,48 @@ class LLMDecisionMaker:
         return "\n".join(lines)
 
     def _update_knowledge_summary(self, trial_history: list):
-        """Updates the LLM summary every 5 trials."""
+        """Updates the LLM summary every 5 trials, correcting past assumptions."""
         if len(trial_history) - self.last_summarized_idx >= 5:
             recent_batch = trial_history[self.last_summarized_idx : self.last_summarized_idx + 5]
             batch_str = self._format_history(recent_batch)
             
-            prompt = f"""You are an AI assistant helping a model compression agent.
-Previous Knowledge: {self.knowledge_summary}
+            prompt = f"""You are an AI assistant maintaining an evolving knowledge base for a model compression agent. 
 
-Recent 5 Trials:
+=== CURRENT KNOWLEDGE SUMMARY (May contain outdated or incorrect early assumptions) ===
+{self.knowledge_summary}
+
+=== NEW TRIAL RESULTS ===
 {batch_str}
 
-Analyze the recent trials. What compression strategies (ASVD, SparseGPT, Quantization) worked well for maximizing the score (balancing accuracy, latency, VRAM, emissions)? What failed? 
-Output a concise updated summary of the best practices found so far."""
+=== INSTRUCTIONS ===
+Your task is to rewrite and update the current knowledge summary based on the new trial results.
+1. FIND CORRELATIONS: Identify how specific parameter movements affect the metrics. (e.g., "When parameter X goes down, accuracy drops sharply").
+2. DEFINE BOUNDARIES: Identify safe and unsafe zones for hyperparameters based on past failures (e.g., "Ratio values below 0.85 cause failure").
+3. STRATEGIC SUGGESTION: Suggest the next logical phase of exploration based on the trade-offs observed (e.g., "We have hit a wall with VRAM reduction using Method A; explore Method B to push VRAM lower").
+4. 🛑 CRITICAL CONSTRAINT 🛑: DO NOT specify exact parameter combinations to run next. Define the "rules of the game" (what works and what fails), and let the execution agent decide the exact numbers.
+
+Output ONLY the newly updated summary text. Do not include conversational filler.
+"""
 
             try:
                 response = self.client.chat.completions.create(
-                    model=os.getenv("SUMMARY_MODEL", "gpt-4o"), # Using a cheaper model for summarization
+                    model=os.getenv("SUMMARY_MODEL", "gpt-4o-mini"), # Cheaper/faster model
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.3
                 )
+                # Overwrite the old summary with the newly evolved one
                 self.knowledge_summary = response.choices[0].message.content.strip()
                 self.last_summarized_idx += 5
+                
+                # Log the update so you can watch the agent "change its mind" in the terminal
+                import logging
+                logger = logging.getLogger("LLMClient")
+                logger.info(f"\n🧠 [Knowledge Base Updated]\n{self.knowledge_summary}\n")
+                
             except Exception as e:
-                print(f"Failed to update knowledge summary: {e}")
+                import logging
+                logger = logging.getLogger("LLMClient")
+                logger.error(f"Failed to update knowledge summary: {e}")
 
     def _create_prompt(self, iteration: int, trial_history: list, pareto: list = None,
                        weights: dict = None) -> str:
