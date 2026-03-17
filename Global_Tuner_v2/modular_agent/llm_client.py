@@ -74,7 +74,7 @@ OUTPUT FORMAT:
 OUTPUT FORMAT:
 {{"reasoning": "...", "mode": "quant_only", "quant_method": "gptq",
   "quant_bits": 4,        // [2,3,4,8]; lower = smaller model but more accuracy loss
-  "quant_group_size": 128, // [32,64,128,256]; smaller = more accurate but larger file; -1 = per-channel (fastest, lowest accuracy)
+  "quant_group_size": 128, // [16,32,64,128,256]; smaller = more accurate but larger file
   "quant_format": "gptq", // [gptq, gptq_v2]; gptq_v2 slightly better accuracy; marlin/bitblas FAIL — do NOT use
   "damp_percent": 0.05,   // Hessian dampening [0.005, 0.01, 0.05, 0.1]; 0.05 is safe default, 0.01 more aggressive
   "mse": 0.0              // MSE regularization in loss [0.0, 0.01, 0.05, 0.1]; 0.0 = standard GPTQ; >0 may slightly improve accuracy
