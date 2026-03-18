@@ -370,11 +370,36 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
             # If no tool calls, it means the model outputted the final JSON
             else:
                 raw_content = self._strip_json_comments(msg.content)
-                try:
-                    from schemas import StrategySuggestion
-                    suggestion = StrategySuggestion.model_validate_json(raw_content)
-                    return suggestion, json.loads(raw_content)
-                except ValidationError as e:
-                    logger.error(f"Validation failed in tool mode: {e}. Falling back to default.")
-                    # Fallback if the agent messes up the JSON after tool calling
-                    return self.get_suggestion(iteration, trial_history, pareto, weights) # Fallback to standard flow
+                
+                # ---  Mini-retry loop to preserve tool context ---
+                for attempt in range(2): 
+                    try:
+                        from schemas import StrategySuggestion
+                        suggestion = StrategySuggestion.model_validate_json(raw_content)
+                        return suggestion, json.loads(raw_content)
+                    except ValidationError as e:
+                        logger.warning(f"⚠️ Tool-mode JSON validation failed (attempt {attempt+1}/2): {e}")
+                        
+                        if attempt == 1: # Last attempt failed
+                            logger.error("Agent failed to fix JSON. Falling back to window mode.")
+                            original_memory = self.memory_type
+                            self.memory_type = "window"
+                            try:  # just use fallback memory mode to get a valid suggestion without crashing the whole system, even if it's not tool-optimized
+                                return self.get_suggestion(iteration, trial_history, pareto, weights)
+                            finally:
+                                self.memory_type = original_memory
+                                
+                        # Feed the error back into the SAME message array (Preserves tool context!)
+                        messages.append({"role": "assistant", "content": raw_content})
+                        messages.append({
+                            "role": "user", 
+                            "content": f"Your JSON failed Pydantic validation. Please fix these errors and output valid JSON:\n{e}"
+                        })
+                        
+                        # Ask the LLM one more time to fix it
+                        retry_response = self.client.chat.completions.create(
+                            model=self.llm_model,
+                            messages=messages,
+                            response_format={"type": "json_object"}
+                        )
+                        raw_content = self._strip_json_comments(retry_response.choices[0].message.content)
