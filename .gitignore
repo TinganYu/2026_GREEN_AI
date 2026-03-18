@@ -11,6 +11,8 @@ results/llm_optimization
 results/optimization
 results/*.txt
 tuning_results/
+systematic_results/baselines/
+systematic_results/optuna*
 test.ipynb
 test.py
 Llama*
@@ -20,6 +22,6 @@ Llama*
 *.sh
 CLAUDE.md
 gptqmodel_offload/
-docs/
+tmp/docs/
 .cache
 .vscode
