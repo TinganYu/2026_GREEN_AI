@@ -58,17 +58,16 @@ class LLMDecisionMaker:
                 continue
                 
             mode = cfg.get("mode", "")
-            q_method = cfg.get("quant_method", "")
 
             # Match logic based on the query
             is_match = False
-            if query == "asvd" and mode in ["asvd_only", "hybrid"]:
+            if query == "asvd" and mode in ["asvd_only", "hybrid_asvd_bnb"]:
                 is_match = True
-            elif query in ["gptq", "awq", "qqq", "bnb"] and q_method == query:
+            elif query in ["gptq", "awq", "qqq", "bnb"] and mode == query:
                 is_match = True
-            elif query == "sparse" and mode in ["sparse_only", "hybrid"]:
+            elif query == "sparse" and mode in ["sparse_unstructured", "sparse_structured"]:
                 is_match = True
-            elif query == "hybrid" and mode == "hybrid":
+            elif query == "hybrid" and mode == "hybrid_asvd_bnb":
                 is_match = True
 
             if is_match:
@@ -161,59 +160,59 @@ Score > 1.0 means improvement over uncompressed baseline. Logarithmic scaling da
 === AVAILABLE MODES ===
 [MODE: asvd_only] Low-rank decomposition → reduces Latency. Often hurts Accuracy; keep param_ratio_target high.
 OUTPUT FORMAT:
-{{"reasoning": "...", "mode": "asvd_only",
-  "alpha": 0.5,              
-  "param_ratio_target": 0.90, 
-  "scaling_method": "fisher"  
+{{"reasoning": "...", "mode": "asvd_only", 
+    "alpha": 0.5,               // Must be inbetween 0.3 and 0.7
+    "param_ratio_target": 0.90, // Must be inbetween 0.70 and 0.99
+    "scaling_method": "fisher"  // Must be one of: ["abs_mean", "abs_max", "fisher"]
 }}
 
-[MODE: quant_only / GPTQ] Hessian-based weight quantization → reduces VRAM. Most compatible (2/3/4/8-bit).
-OUTPUT FORMAT:
-{{"reasoning": "...", "mode": "quant_only", "quant_method": "gptq",
-  "quant_bits": 4,        
-  "quant_group_size": 128, 
-  "quant_format": "gptq", 
-  "damp_percent": 0.05,   
-  "mse": 0.0              
+[MODE: gptq] Hessian-based weight quantization → reduces VRAM. Most compatible (2/3/4/8-bit).
+OUTPUT FORMAT (Strict Search Space):
+{{"reasoning": "...", "mode": "gptq",
+  "quant_bits": 4,         // Must be one of: [2, 3, 4, 8]
+  "quant_group_size": 128, // Must be one of: [16, 32, 64, 128, 256]
+  "quant_format": "gptq",  // Must be one of: ["gptq", "gptq_v2"]
+  "damp_percent": 0.05,    // Must be one of: [0.005, 0.01, 0.05, 0.1]
+  "mse": 0.0               // Must be one of: [0.0, 0.01, 0.05, 0.1]
 }}
 
-[MODE: quant_only / AWQ] Activation-aware quantization → reduces VRAM. FIXED: bits=4, format=gemm (auto).
-OUTPUT FORMAT:
-{{"reasoning": "...", "mode": "quant_only", "quant_method": "awq",
-  "quant_group_size": 128  
+[MODE: awq] Activation-aware quantization → reduces VRAM.
+OUTPUT FORMAT (Strict Search Space):
+{{"reasoning": "...", "mode": "awq",
+  "quant_group_size": 128  // Must be one of: [16, 32, 64, 128]
 }}
 
-[MODE: quant_only / QQQ] W4A8 quantization. FIXED: bits=4, format=qqq.
-OUTPUT FORMAT:
-{{"reasoning": "...", "mode": "quant_only", "quant_method": "qqq",
-  "quant_group_size": 128, 
-  "damp_percent": 0.005    
+[MODE: qqq] W4A8 quantization.
+OUTPUT FORMAT (Strict Search Space):
+{{"reasoning": "...", "mode": "qqq",
+  "quant_group_size": 128, // Must be one of: [-1, 128]
+  "damp_percent": 0.005    // Must be one of: [0.001, 0.005, 0.01]
 }}
 
-[MODE: quant_only / BNB] On-the-fly quantization.
-OUTPUT FORMAT:
-{{"reasoning": "...", "mode": "quant_only", "quant_method": "bnb",
-  "quant_bits": 4,         
-  "use_double_quant": false 
+[MODE: bnb] On-the-fly quantization.
+OUTPUT FORMAT (Strict Search Space):
+{{"reasoning": "...", "mode": "bnb",
+  "quant_bits": 4,         // Must be one of: [4, 8]
+  "use_double_quant": false // True only if quant_bits is 4
 }}
 
-[MODE: sparse_only / unstructured] SparseGPT weight pruning.
-OUTPUT FORMAT:
-{{"reasoning": "...", "mode": "sparse_only", "sparsity_structure": "unstructured",
-  "sparsity_ratio": 0.5  
+[MODE: sparse_unstructured] SparseGPT weight pruning.
+OUTPUT FORMAT (Strict Search Space):
+{{"reasoning": "...", "mode": "sparse_unstructured",
+  "sparsity_ratio": 0.5    // Must be one of: [0.3, 0.4, 0.5, 0.6, 0.7]
 }}
 
-[MODE: sparse_only / structured] Structured sparsity (N:M pattern). 
-OUTPUT FORMAT:
-{{"reasoning": "...", "mode": "sparse_only",
-  "sparsity_structure": "2:4"  
+[MODE: sparse_structured] Structured sparsity (N:M pattern).
+OUTPUT FORMAT (Strict Search Space):
+{{"reasoning": "...", "mode": "sparse_structured",
+  "sparsity_structure": "2:4" // Must be one of: ["2:4", "4:8"]
 }}
 
-[MODE: hybrid / ASVD+BNB] Combine low-rank + quantization. 
+[MODE: hybrid_asvd_bnb] Combine ASVD + BNB.
 OUTPUT FORMAT:
-{{"reasoning": "...", "mode": "hybrid",
+{{"reasoning": "...", "mode": "hybrid_asvd_bnb",
   "alpha": 0.5, "param_ratio_target": 0.92, "scaling_method": "fisher",
-  "quant_method": "bnb", "quant_bits": 4, "use_double_quant": false
+  "quant_bits": 4, "use_double_quant": false
 }}
 
 === CURRENT STATUS ===
@@ -231,6 +230,7 @@ Pareto Frontier (best trade-offs found):
 
 Output ONLY the JSON for your chosen mode. No extra fields, no prose.
 """
+
 
     @staticmethod
     def _strip_json_comments(text: str) -> str:

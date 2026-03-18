@@ -75,9 +75,33 @@ def run_sparse(model_path: str, suggestion, output_dir: Optional[str] = None) ->
     return _run_sparse(model_path, config)
 
 
+# def run_quantization(model_path: str, suggestion, output_dir: Optional[str] = None) -> str:
+#     """執行量化（gptq/awq/qqq/bnb）"""
+#     method = suggestion.quant_method.lower()
+
+#     if method == "awq":
+#         fmt = "gemm"
+#     elif method == "qqq":
+#         fmt = "qqq"
+#     else:
+#         fmt = suggestion.quant_format or "gptq"
+
+#     config = QuantConfig(
+#         method=method,
+#         bits=suggestion.quant_bits,
+#         group_size=suggestion.quant_group_size or 128,
+#         format=fmt,
+#         damp_percent=suggestion.damp_percent or 0.05,
+#         mse=suggestion.mse or 0.0,
+#         quant_type=suggestion.quant_type or "nf4",
+#         use_double_quant=suggestion.use_double_quant or False,
+#         output_dir=output_dir,
+#     )
+#     return _run_quantization(model_path, config)
 def run_quantization(model_path: str, suggestion, output_dir: Optional[str] = None) -> str:
     """執行量化（gptq/awq/qqq/bnb）"""
-    method = suggestion.quant_method.lower()
+    # Map hybrid mode to BNB, otherwise use the mode name directly
+    method = "bnb" if suggestion.mode == "hybrid_asvd_bnb" else suggestion.mode
 
     if method == "awq":
         fmt = "gemm"
@@ -88,17 +112,16 @@ def run_quantization(model_path: str, suggestion, output_dir: Optional[str] = No
 
     config = QuantConfig(
         method=method,
-        bits=suggestion.quant_bits,
+        bits=4 if method in ("awq", "qqq") else (suggestion.quant_bits or 4),
         group_size=suggestion.quant_group_size or 128,
         format=fmt,
         damp_percent=suggestion.damp_percent or 0.05,
         mse=suggestion.mse or 0.0,
-        quant_type=suggestion.quant_type or "nf4",
-        use_double_quant=suggestion.use_double_quant or False,
+        quant_type=getattr(suggestion, 'quant_type', 'nf4'),
+        use_double_quant=getattr(suggestion, 'use_double_quant', False),
         output_dir=output_dir,
     )
     return _run_quantization(model_path, config)
-
 
 # ============================================================================
 # 評估函數（直接呼叫 Evals/ 評估器）

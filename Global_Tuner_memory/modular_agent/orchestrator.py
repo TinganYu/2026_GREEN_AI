@@ -54,37 +54,41 @@ def _make_trial_name(i: int, suggestion) -> str:
     """生成 trial 目錄名稱，包含編號、方法與關鍵參數"""
     parts = [f"trial_{i:03d}"]
     mode = suggestion.mode
+    
+    # Append the base mode name first
+    parts.append(mode)
 
-    if mode in ("sparse_only", "hybrid"):
-        struct = suggestion.sparsity_structure or "unstructured"
-        is_structured = struct != "unstructured"
-        has_ratio = suggestion.sparsity_ratio and suggestion.sparsity_ratio > 0
-        if is_structured or has_ratio:
-            if is_structured:
-                # "2:4" → "sparse_2x4"、"4:8" → "sparse_4x8"
-                parts.append(f"sparse_{struct.replace(':', 'x')}")
-            else:
-                ratio_pct = int(suggestion.sparsity_ratio * 100)
-                parts.append(f"sparse_{ratio_pct}pct")
+    if mode == "sparse_unstructured":
+        ratio_pct = int((suggestion.sparsity_ratio or 0.5) * 100)
+        parts.append(f"{ratio_pct}pct")
+        
+    elif mode == "sparse_structured":
+        struct = suggestion.sparsity_structure or "2:4"
+        parts.append(struct.replace(':', 'x'))
 
-    if mode in ("asvd_only", "hybrid") and suggestion.alpha is not None:
+    if mode in ("asvd_only", "hybrid_asvd_bnb") and suggestion.alpha is not None:
         ratio_str = f"{int((suggestion.param_ratio_target or 0.9) * 100):03d}"
         alpha_str = f"{int((suggestion.alpha or 0.5) * 100):02d}"
-        parts.append(f"asvd_r{ratio_str}_a{alpha_str}")
+        parts.append(f"r{ratio_str}_a{alpha_str}")
 
-    if mode in ("quant_only", "hybrid") and suggestion.quant_method != "none":
-        m = suggestion.quant_method
-        b = suggestion.quant_bits
+    # Handle Quantization specific parameters
+    if mode == "gptq":
+        b = suggestion.quant_bits or 4
         g = suggestion.quant_group_size or 128
         fmt = suggestion.quant_format or "gptq"
-        if m == "gptq":
-            parts.append(f"gptq_{b}bit_g{g}_{fmt}")
-        elif m == "awq":
-            parts.append(f"awq_{b}bit_g{g}")
-        elif m == "qqq":
-            parts.append(f"qqq_4bit_g{g}")
-        elif m == "bnb":
-            parts.append(f"bnb_{b}bit")
+        parts.append(f"{b}bit_g{g}_{fmt}")
+        
+    elif mode == "awq":
+        g = suggestion.quant_group_size or 128
+        parts.append(f"4bit_g{g}") # AWQ is fixed to 4-bit in your space
+        
+    elif mode == "qqq":
+        g = suggestion.quant_group_size or 128
+        parts.append(f"4bit_g{g}") # QQQ is fixed to 4-bit
+        
+    elif mode in ("bnb", "hybrid_asvd_bnb"):
+        b = getattr(suggestion, 'quant_bits', 4)
+        parts.append(f"{b}bit")
 
     return "_".join(parts)
 
@@ -330,14 +334,12 @@ class OptimizationOrchestrator:
             # 最後一個壓縮步驟的輸出存到 trial_dir（讓評估器結果路徑正確）
             # 中間步驟存到子目錄以便偵錯
             current_model = self.base_model_path
+            mode = suggestion.mode # New flattened mode string
 
-            _struct = suggestion.sparsity_structure or "unstructured"
-            has_sparse = suggestion.mode in ["sparse_only", "hybrid"] and (
-                _struct != "unstructured" or bool(suggestion.sparsity_ratio)
-            )
-            has_asvd = suggestion.mode in ["asvd_only", "hybrid"] and suggestion.alpha is not None
-            has_quant = suggestion.mode in ["quant_only", "hybrid"] and suggestion.quant_method != "none"
-
+            # The new explicit boolean flags based on your teammate's ALL_MODES
+            has_sparse = mode in ["sparse_unstructured", "sparse_structured"]
+            has_asvd = mode in ["asvd_only", "hybrid_asvd_bnb"]
+            has_quant = mode in ["gptq", "awq", "qqq", "bnb", "hybrid_asvd_bnb"]
             try:
                 if has_sparse:
                     sparse_out = trial_dir if (not has_asvd and not has_quant) else str(Path(trial_dir) / "sparse")
@@ -435,6 +437,7 @@ class OptimizationOrchestrator:
 
         # 最終報告
         self._print_summary()
+        self._save_pareto_results()
 
         # 清理 trial 模型
         if self.cleanup:
@@ -501,6 +504,21 @@ class OptimizationOrchestrator:
             json.dump(self._make_serializable(self.trial_history), f, indent=2, ensure_ascii=False)
         logger.info(f"歷史已儲存: {output_path}")
 
+    def _save_pareto_results(self):
+        """Extracts the Pareto frontier from history and saves it to a dedicated file."""
+        from utils import get_pareto_frontier
+        import json
+        
+        pareto_trials = get_pareto_frontier(self.trial_history)
+        if not pareto_trials:
+            logger.warning("No valid trials to form a Pareto frontier.")
+            return
+
+        pareto_path = self.exp_dir / "pareto_frontier.json"
+        with open(pareto_path, "w", encoding="utf-8") as f:
+            json.dump(self._make_serializable(pareto_trials), f, indent=2, ensure_ascii=False)
+        logger.info(f"Pareto frontier successfully saved to: {pareto_path}")
+
     def _make_serializable(self, data):
         if isinstance(data, dict):
             return {k: self._make_serializable(v) for k, v in data.items()}
@@ -529,9 +547,9 @@ if __name__ == "__main__":
     parser.add_argument("--num_samples", type=int, default=None,
                         help="每個 dataset 的評估樣本數（None = 全部）")
     parser.add_argument("--acc_weight", type=float, default=0.6)
-    parser.add_argument("--lat_weight", type=float, default=0.1)
-    parser.add_argument("--vram_weight", type=float, default=0.1)
-    parser.add_argument("--emit_weight", type=float, default=0.2)
+    parser.add_argument("--lat_weight", type=float, default=0.05)
+    parser.add_argument("--vram_weight", type=float, default=0.05)
+    parser.add_argument("--emit_weight", type=float, default=0.3)
     parser.add_argument("--no-cleanup", dest="cleanup", action="store_false",
                         help="跑完後不刪除 trial 模型（預設：刪除）")
     parser.add_argument("--no-keep-best", dest="keep_best", action="store_false",
