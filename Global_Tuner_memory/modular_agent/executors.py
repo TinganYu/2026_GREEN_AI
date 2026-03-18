@@ -10,6 +10,7 @@
 
 import logging
 import sys
+import math
 import traceback
 from pathlib import Path
 from typing import Optional
@@ -301,11 +302,11 @@ def run_evaluation(model_path: str, tasks, weights: dict, baseline_metrics: dict
     norm_vram = base_vram / (max_vram + 1e-6)
     norm_emit = base_emit / (avg_emit + 1e-6)
 
-    final_score = (
-        weights.get("acc", 0.0) * norm_acc +
-        weights.get("lat", 0.0) * norm_lat +
-        weights.get("vram", 0.0) * norm_vram +
-        weights.get("emit", 0.0) * norm_emit
+    final_score = 1.0 + (
+        weights.get("acc", 0.0) * math.log(norm_acc + 1e-9) +
+        weights.get("lat", 0.0) * math.log(norm_lat + 1e-9) +
+        weights.get("vram", 0.0) * math.log(norm_vram + 1e-9) +
+        weights.get("emit", 0.0) * math.log(norm_emit + 1e-9)
     )
     evaluator.unload_model()
     return {

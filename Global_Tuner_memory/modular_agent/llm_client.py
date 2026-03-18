@@ -46,18 +46,55 @@ class LLMDecisionMaker:
             lines.append(line)
         return "\n".join(lines)
 
+    def _execute_retrieve_trials(self, query: str, trial_history: list, top_n: int = 5) -> str:
+        """Filters the trial history based on the requested sub-method and returns top N by score."""
+        if not trial_history:
+            return "No past trials available."
+
+        filtered = []
+        for trial in trial_history:
+            cfg = trial.get("config", {})
+            if not cfg:
+                continue
+                
+            mode = cfg.get("mode", "")
+            q_method = cfg.get("quant_method", "")
+
+            # Match logic based on the query
+            is_match = False
+            if query == "asvd" and mode in ["asvd_only", "hybrid"]:
+                is_match = True
+            elif query in ["gptq", "awq", "qqq", "bnb"] and q_method == query:
+                is_match = True
+            elif query == "sparse" and mode in ["sparse_only", "hybrid"]:
+                is_match = True
+            elif query == "hybrid" and mode == "hybrid":
+                is_match = True
+
+            if is_match:
+                filtered.append(trial)
+
+        if not filtered:
+            return f"No trials found matching query: '{query}'."
+
+        # Sort by score descending and take top N
+        filtered.sort(key=lambda x: x.get("metrics", {}).get("score", 0), reverse=True)
+        filtered = filtered[:top_n]
+
+        return f"--- RETRIEVAL RESULTS FOR '{query}' (Top {len(filtered)} by Score) ---\n" + self._format_history(filtered)
+
     def _update_knowledge_summary(self, trial_history: list):
         """Updates the LLM summary every 5 trials, correcting past assumptions."""
         if len(trial_history) - self.last_summarized_idx >= 5:
-            recent_batch = trial_history[self.last_summarized_idx : self.last_summarized_idx + 5]
-            batch_str = self._format_history(recent_batch)
+            # recent_batch = trial_history[self.last_summarized_idx : self.last_summarized_idx + 5]
+            batch_str = self._format_history(trial_history)
             
             prompt = f"""You are an AI assistant maintaining an evolving knowledge base for a model compression agent. 
 
 === CURRENT KNOWLEDGE SUMMARY (May contain outdated or incorrect early assumptions) ===
 {self.knowledge_summary}
 
-=== NEW TRIAL RESULTS ===
+=== FULL EXPERIMENTAL HISTORY (Trials 1 through Current) ===
 {batch_str}
 
 === INSTRUCTIONS ===
@@ -96,6 +133,9 @@ Output ONLY the newly updated summary text. Do not include conversational filler
         # Handle the different memory modes
         if self.memory_type == "window":
             history_str = self._format_history(trial_history[-5:])
+        elif self.memory_type == "tool":
+            # Keep baseline context tight; the agent will fetch what else it needs
+            history_str = self._format_history(trial_history[-3:])
         elif self.memory_type == "summary":
             self._update_knowledge_summary(trial_history)
             unsummarized = trial_history[self.last_summarized_idx:]
@@ -115,8 +155,8 @@ Output ONLY the newly updated summary text. Do not include conversational filler
         return f"""You are an LLM compression optimization agent. Choose the best compression strategy for:
 Model: {self.model_id} | Task: {self.task} | Iteration: {iteration}/{self.max_iterations}
 
-GOAL: Maximize score = {w_acc}*(Acc/Base_acc) + {w_lat}*(Base_lat/Lat) + {w_vram}*(Base_vram/VRAM) + {w_emit}*(Base_emit/Emit)
-Score > 1.0 means improvement over uncompressed baseline.
+GOAL: Maximize score = 1.0 + {w_acc}*ln(Acc/Base_acc) + {w_lat}*ln(Base_lat/Lat) + {w_vram}*ln(Base_vram/VRAM) + {w_emit}*ln(Base_emit/Emit)
+Score > 1.0 means improvement over uncompressed baseline. Logarithmic scaling dampens extreme outliers.
 
 === AVAILABLE MODES ===
 [MODE: asvd_only] Low-rank decomposition → reduces Latency. Often hurts Accuracy; keep param_ratio_target high.
@@ -204,7 +244,11 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
         """
         Returns (suggestion: StrategySuggestion, raw_llm_output: dict)
         raw_llm_output is the raw LLM output (without pydantic defaults), used for logging.
+        Routes the request based on memory type.
         """
+        if self.memory_type == "tool":
+            return self._get_suggestion_with_tools(iteration, trial_history, pareto, weights)
+
         import json
         from pydantic import ValidationError
         import logging
@@ -246,3 +290,91 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
                     "role": "user", 
                     "content": f"Your JSON failed Pydantic validation. Please fix the following errors and strictly follow the schema:\n{e}"
                 })
+
+    def _get_suggestion_with_tools(self, iteration: int, trial_history: list, pareto: list = None, weights: dict = None):
+        """Bounded multi-round tool-calling loop."""
+        import json
+        from pydantic import ValidationError
+        import logging
+        logger = logging.getLogger("LLMClient")
+        MAX_TURNS = 3 # Turn 1: Tool Call, Turn 2: Tool Call or Answer, Turn 3: Forced Answer
+
+        # The prompt is simpler because the agent will fetch what it needs
+        system_prompt = self._create_prompt(
+            iteration, 
+            trial_history, # Only show the absolute most recent 3 trials by default
+            pareto=pareto, 
+            weights=weights
+        )
+        system_prompt += (
+            "\n\n=== TOOL USAGE RULES ===\n"
+            "1. You have a 'retrieve_trials' tool to search past experiments by method.\n"
+            f"2. You have a STRICT LIMIT of {MAX_TURNS - 1} search queries per iteration. Plan your queries carefully!\n"
+            "3. Once you have enough information, or if you run out of turns, you MUST output ONLY the final StrategySuggestion JSON."
+        )
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        tools = [{
+            "type": "function",
+            "function": {
+                "name": "retrieve_trials",
+                "description": "Fetch past trial results by method to see what parameters succeeded or failed. (Pareto best configs are already in your prompt).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string", 
+                            "enum": ["asvd", "gptq", "awq", "qqq", "bnb", "sparse", "hybrid"],
+                            "description": "The specific compression method to search for."
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        }]
+        
+        for turn in range(MAX_TURNS):
+            force_answer = (turn == MAX_TURNS - 1)
+            
+            response = self.client.chat.completions.create(
+                model=self.llm_model,
+                messages=messages,
+                tools=tools if not force_answer else None,
+                tool_choice="auto" if not force_answer else "none",
+            )
+            
+            msg = response.choices[0].message
+            messages.append(msg) # Append assistant message to history
+            
+            # If the model decided to use a tool
+            if msg.tool_calls:
+                for tool_call in msg.tool_calls:
+                    args = json.loads(tool_call.function.arguments)
+                    query = args.get("query")
+                    
+                    if not query:
+                        # 防呆機制：如果 LLM 漏給參數，強制它重新思考
+                        retrieval_results = "System Error: Missing required parameter 'query'. Please specify a method like 'gptq' or 'asvd'."
+                        logger.warning("Agent called tool without a query.")
+                    else:
+                        logger.info(f"🔍 Agent requested retrieval for: {query}")
+                        retrieval_results = self._execute_retrieve_trials(query, trial_history)
+                    
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": retrieval_results
+                    })
+                continue # Go to the next turn to let the LLM analyze the results
+                
+            # If no tool calls, it means the model outputted the final JSON
+            else:
+                raw_content = self._strip_json_comments(msg.content)
+                try:
+                    from schemas import StrategySuggestion
+                    suggestion = StrategySuggestion.model_validate_json(raw_content)
+                    return suggestion, json.loads(raw_content)
+                except ValidationError as e:
+                    logger.error(f"Validation failed in tool mode: {e}. Falling back to default.")
+                    # Fallback if the agent messes up the JSON after tool calling
+                    return self.get_suggestion(iteration, trial_history, pareto, weights) # Fallback to standard flow

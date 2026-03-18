@@ -538,7 +538,7 @@ if __name__ == "__main__":
                         help="刪除時連最佳 trial 也刪（預設：保留最佳）")
     parser.set_defaults(cleanup=True, keep_best=True)
 
-    parser.add_argument("--memory_type", type=str, choices=["full", "window", "summary"], default="full",
+    parser.add_argument("--memory_type", type=str, choices=["full", "window", "summary", "tool"], default="full",
                         help="單次執行時使用的 memory 模式")
     parser.add_argument("--benchmark_runs", type=int, default=1,
                         help="大於 1 時，將自動對三種 memory 模式各執行 N 次並輸出 Markdown 比較表")
@@ -549,11 +549,12 @@ if __name__ == "__main__":
         "vram": args.vram_weight, "emit": args.emit_weight,
     }
     if args.benchmark_runs > 1:
-        memory_modes = ["full", "window", "summary"]
+        memory_modes = ["full", "window", "summary", "tool"]
         descriptions = {
             "full": "全部實驗結果", 
             "window": "最近 5 個", 
-            "summary": "LLM summary"
+            "summary": "LLM summary",
+            "tool": "Agentic Tool Retrieval"
         }
         results_stats = []
         
