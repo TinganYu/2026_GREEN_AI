@@ -23,7 +23,7 @@
 | 參數 | 類型 | 範圍 / 選項 | 預設 | 說明 |
 |------|------|------------|------|------|
 | `quant_bits` | categorical | `2, 3, 4, 8` | 4 | 量化位元數，4bit 為主流平衡點 |
-| `quant_group_size` | categorical | `-1, 16, 32, 64, 128, 256` | 128 | 分組大小，-1=全矩陣；越小精度越高但檔案越大 |
+| `quant_group_size` | categorical | `16, 32, 64, 128, 256` | 128 | 分組大小；越小精度越高但檔案越大 |
 | `quant_format` | categorical | `gptq`, `gptq_v2` | `gptq` | gptq_v2 修正了 v1 的溢位問題，通常略優 |
 | `damp_percent` | float **log** | 0.001 ~ 0.1 | 0.05 | Hessian 穩定項，實務常用 0.01~0.05；log scale 避免低值探索不足 |
 | `mse` | — | 固定 0.0 | 0.0 | 已移除：幾乎都用 0.0，放進 search space 浪費 trial |

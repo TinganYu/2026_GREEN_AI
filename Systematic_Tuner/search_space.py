@@ -17,7 +17,7 @@ ASVD_SPACE = {
 # ── GPTQ ──────────────────────────────────────────────────────────────────────
 GPTQ_SPACE = {
     "quant_bits":       [2, 3, 4, 8],                      # categorical（只有這些合法值）
-    "quant_group_size": [-1, 16, 32, 64, 128, 256],        # categorical（-1=全矩陣，其餘須為 2 的冪次）
+    "quant_group_size": [16, 32, 64, 128, 256],             # categorical（須為 2 的冪次；-1 不相容 GAR）
     "quant_format":     ["gptq", "gptq_v2"],               # categorical
     "damp_percent":     (0.001, 0.1, "log"),               # log：0.001↔0.01 和 0.01↔0.1 各佔一半探索量
     # mse 移除：幾乎都用 0.0，放進 search space 只是浪費 trial
