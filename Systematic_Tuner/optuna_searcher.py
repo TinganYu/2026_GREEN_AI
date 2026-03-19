@@ -1,7 +1,10 @@
 """
 Optuna 演算法搜尋實作
 使用 TPE / NSGA-II / Random 搜尋最佳量化配置
-條件式搜尋空間：先選 mode，再依 mode 選對應參數
+
+搜尋空間慣例（對應 search_space.py）：
+  tuple (low, high)   → suggest_float（連續，TPE 可充分探索）
+  list  [...]         → suggest_categorical（只有這幾個合法值）
 """
 
 import logging
@@ -21,6 +24,20 @@ from .search_space import (
 )
 
 logger = logging.getLogger("OptunaSearcher")
+
+
+def _suggest(trial: optuna.Trial, name: str, space):
+    """
+    根據 space 型別自動選擇 suggest 方式：
+      tuple (low, high)         → suggest_float，linear scale
+      tuple (low, high, "log")  → suggest_float，log scale
+      list  [...]               → suggest_categorical
+    """
+    if isinstance(space, tuple):
+        if len(space) == 3 and space[2] == "log":
+            return trial.suggest_float(name, space[0], space[1], log=True)
+        return trial.suggest_float(name, space[0], space[1])
+    return trial.suggest_categorical(name, space)
 
 
 class OptunaSearcher:
@@ -70,87 +87,69 @@ class OptunaSearcher:
 
         # ── ASVD only ────────────────────────────────────────────────────────
         if mode_key == "asvd_only":
-            kwargs["alpha"] = trial.suggest_categorical(
-                "alpha", ASVD_SPACE["alpha"])
-            kwargs["param_ratio_target"] = trial.suggest_categorical(
-                "param_ratio_target", ASVD_SPACE["param_ratio_target"])
-            kwargs["scaling_method"] = trial.suggest_categorical(
-                "scaling_method", ASVD_SPACE["scaling_method"])
+            kwargs["alpha"]              = _suggest(trial, "alpha",              ASVD_SPACE["alpha"])
+            kwargs["param_ratio_target"] = _suggest(trial, "param_ratio_target", ASVD_SPACE["param_ratio_target"])
+            kwargs["scaling_method"]     = _suggest(trial, "scaling_method",     ASVD_SPACE["scaling_method"])
 
         # ── GPTQ ─────────────────────────────────────────────────────────────
         elif mode_key == "gptq":
-            kwargs["mode"] = "quant_only"
-            kwargs["quant_method"] = "gptq"
-            bits = trial.suggest_categorical("gptq_bits", GPTQ_SPACE["quant_bits"])
-            kwargs["quant_bits"] = bits
-            kwargs["quant_group_size"] = trial.suggest_categorical(
-                "gptq_group_size", GPTQ_SPACE["quant_group_size"])
-            kwargs["quant_format"] = trial.suggest_categorical(
-                "gptq_format", GPTQ_SPACE["quant_format"])
-            kwargs["damp_percent"] = trial.suggest_categorical(
-                "gptq_damp", GPTQ_SPACE["damp_percent"])
-            kwargs["mse"] = trial.suggest_categorical(
-                "gptq_mse", GPTQ_SPACE["mse"])
+            kwargs["mode"]           = "quant_only"
+            kwargs["quant_method"]   = "gptq"
+            kwargs["quant_bits"]     = _suggest(trial, "gptq_bits",       GPTQ_SPACE["quant_bits"])
+            kwargs["quant_group_size"] = _suggest(trial, "gptq_group_size", GPTQ_SPACE["quant_group_size"])
+            kwargs["quant_format"]   = _suggest(trial, "gptq_format",     GPTQ_SPACE["quant_format"])
+            kwargs["damp_percent"]   = _suggest(trial, "gptq_damp",       GPTQ_SPACE["damp_percent"])
+            kwargs["mse"]            = 0.0
 
         # ── AWQ ──────────────────────────────────────────────────────────────
         elif mode_key == "awq":
-            kwargs["mode"] = "quant_only"
-            kwargs["quant_method"] = "awq"
-            kwargs["quant_bits"] = 4
-            kwargs["quant_group_size"] = trial.suggest_categorical(
-                "awq_group_size", AWQ_SPACE["quant_group_size"])
+            kwargs["mode"]             = "quant_only"
+            kwargs["quant_method"]     = "awq"
+            kwargs["quant_bits"]       = 4
+            kwargs["quant_group_size"] = _suggest(trial, "awq_group_size", AWQ_SPACE["quant_group_size"])
 
         # ── QQQ ──────────────────────────────────────────────────────────────
         elif mode_key == "qqq":
-            kwargs["mode"] = "quant_only"
-            kwargs["quant_method"] = "qqq"
-            kwargs["quant_bits"] = 4
-            kwargs["quant_format"] = "qqq"
-            kwargs["quant_group_size"] = trial.suggest_categorical(
-                "qqq_group_size", QQQ_SPACE["quant_group_size"])
-            kwargs["damp_percent"] = trial.suggest_categorical(
-                "qqq_damp", QQQ_SPACE["damp_percent"])
+            kwargs["mode"]             = "quant_only"
+            kwargs["quant_method"]     = "qqq"
+            kwargs["quant_bits"]       = 4
+            kwargs["quant_format"]     = "qqq"
+            kwargs["quant_group_size"] = _suggest(trial, "qqq_group_size", QQQ_SPACE["quant_group_size"])
+            kwargs["damp_percent"]     = _suggest(trial, "qqq_damp",       QQQ_SPACE["damp_percent"])
 
         # ── BNB ──────────────────────────────────────────────────────────────
         elif mode_key == "bnb":
-            kwargs["mode"] = "quant_only"
+            kwargs["mode"]         = "quant_only"
             kwargs["quant_method"] = "bnb"
-            bits = trial.suggest_categorical("bnb_bits", BNB_SPACE["quant_bits"])
-            kwargs["quant_bits"] = bits
-            # use_double_quant 只在 bits=4 有效
+            bits = _suggest(trial, "bnb_bits", BNB_SPACE["quant_bits"])
+            kwargs["quant_bits"]   = bits
             kwargs["use_double_quant"] = (
-                trial.suggest_categorical("bnb_double_quant", BNB_SPACE["use_double_quant"])
+                _suggest(trial, "bnb_double_quant", BNB_SPACE["use_double_quant"])
                 if bits == 4 else False
             )
 
         # ── Sparse Unstructured ───────────────────────────────────────────────
         elif mode_key == "sparse_unstructured":
-            kwargs["mode"] = "sparse_only"
+            kwargs["mode"]              = "sparse_only"
             kwargs["sparsity_structure"] = "unstructured"
-            kwargs["sparsity_ratio"] = trial.suggest_categorical(
-                "sparse_ratio", SPARSE_UNSTRUCTURED_SPACE["sparsity_ratio"])
+            kwargs["sparsity_ratio"]    = _suggest(trial, "sparse_ratio", SPARSE_UNSTRUCTURED_SPACE["sparsity_ratio"])
 
         # ── Sparse Structured ─────────────────────────────────────────────────
         elif mode_key == "sparse_structured":
-            kwargs["mode"] = "sparse_only"
-            kwargs["sparsity_structure"] = trial.suggest_categorical(
-                "sparse_structure", SPARSE_STRUCTURED_SPACE["sparsity_structure"])
+            kwargs["mode"]               = "sparse_only"
+            kwargs["sparsity_structure"] = _suggest(trial, "sparse_structure", SPARSE_STRUCTURED_SPACE["sparsity_structure"])
 
         # ── Hybrid: ASVD + BNB ───────────────────────────────────────────────
         elif mode_key == "hybrid_asvd_bnb":
-            kwargs["mode"] = "hybrid"
-            kwargs["alpha"] = trial.suggest_categorical(
-                "h_asvd_alpha", ASVD_SPACE["alpha"])
-            kwargs["param_ratio_target"] = trial.suggest_categorical(
-                "h_asvd_ratio", ASVD_SPACE["param_ratio_target"])
-            kwargs["scaling_method"] = trial.suggest_categorical(
-                "h_asvd_scaling", ASVD_SPACE["scaling_method"])
-            kwargs["quant_method"] = "bnb"
-            h_bnb_bits = trial.suggest_categorical("h_bnb_bits", BNB_SPACE["quant_bits"])
-            kwargs["quant_bits"] = h_bnb_bits
-            # use_double_quant 只在 bits=4 有效
-            kwargs["use_double_quant"] = (
-                trial.suggest_categorical("h_bnb_double_quant", BNB_SPACE["use_double_quant"])
+            kwargs["mode"]               = "hybrid"
+            kwargs["alpha"]              = _suggest(trial, "h_asvd_alpha",   ASVD_SPACE["alpha"])
+            kwargs["param_ratio_target"] = _suggest(trial, "h_asvd_ratio",   ASVD_SPACE["param_ratio_target"])
+            kwargs["scaling_method"]     = _suggest(trial, "h_asvd_scaling", ASVD_SPACE["scaling_method"])
+            kwargs["quant_method"]       = "bnb"
+            h_bnb_bits = _suggest(trial, "h_bnb_bits", BNB_SPACE["quant_bits"])
+            kwargs["quant_bits"]         = h_bnb_bits
+            kwargs["use_double_quant"]   = (
+                _suggest(trial, "h_bnb_double_quant", BNB_SPACE["use_double_quant"])
                 if h_bnb_bits == 4 else False
             )
 
@@ -158,11 +157,11 @@ class OptunaSearcher:
 
     # ──────────────────────────────────────────────────────────────────────────
     def get_suggestion(self, iteration: int, trial_history: list, **kwargs):
-        """與 LLMDecisionMaker 相容的介面，回傳 (StrategySuggestion, raw_dict)"""
+        """回傳 (StrategySuggestion, raw_dict)"""
         trial = self.study.ask()
         self._pending_trial = trial
         suggestion = self._trial_to_suggestion(trial)
-        logger.info(f"Optuna 建議 [{iteration}]: {suggestion.mode} / "
+        logger.info(f"Optuna 建議 [{iteration}]: mode={suggestion.mode} / "
                     f"quant={suggestion.quant_method}")
         return suggestion, suggestion.to_log_dict()
 

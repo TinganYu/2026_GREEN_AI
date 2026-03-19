@@ -1,15 +1,16 @@
 """
 Systematic Tuner Orchestrator
-支援 grid search 和 Optuna 演算法搜尋（取代 Global_Tuner_v2 的 LLM 決策）
-重用 Global_Tuner_v2 的 executors、schemas、utils
+以 Optuna（TPE / NSGA-II / Random）搜尋最佳量化配置
 """
 
 import logging
 import gc
 import shutil
+import traceback
 import torch
 import json
 import argparse
+import multiprocessing as mp
 from datetime import datetime
 from pathlib import Path
 
@@ -17,10 +18,37 @@ import sys
 _ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT_DIR))
 
-from Global_Tuner_v2.modular_agent.executors import (
-    run_asvd, run_sparse, run_quantization, run_evaluation,
-)
-from .grid_searcher import GridSearcher
+from .executors import run_asvd, run_sparse, run_quantization, run_evaluation
+
+
+# ── Process Isolation（從 Global_Tuner_v2 移植）────────────────────────────
+def _worker(queue, func, *args, **kwargs):
+    try:
+        result = func(*args, **kwargs)
+        queue.put({"status": "success", "result": result})
+    except Exception as e:
+        queue.put({"status": "error", "error": str(e), "traceback": traceback.format_exc()})
+
+def run_isolated(func, *args, **kwargs):
+    """
+    在獨立的 spawn 子進程中執行函式。
+    子進程結束後 OS 保證 100% 釋放所有 VRAM，根本解決記憶體殘留問題。
+    """
+    ctx = mp.get_context('spawn')
+    queue = ctx.Queue()
+    p = ctx.Process(target=_worker, args=(queue, func) + args, kwargs=kwargs)
+    p.start()
+    p.join()
+
+    if not queue.empty():
+        res = queue.get()
+        if res["status"] == "success":
+            return res["result"]
+        else:
+            raise RuntimeError(f"Isolated process failed:\n{res['error']}\n{res['traceback']}")
+    else:
+        raise RuntimeError("子進程異常終止（可能是 OOM 被 OS 砍掉）。")
+# ────────────────────────────────────────────────────────────────────────────
 from .optuna_searcher import OptunaSearcher
 from .search_space import ALL_MODES
 
@@ -71,22 +99,16 @@ def _make_trial_name(i: int, suggestion) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 class SystematicOrchestrator:
     """
-    以 grid search 或 Optuna 演算法逐一嘗試量化配置。
+    以 Optuna（TPE / NSGA-II / Random）逐一嘗試量化配置。
 
-    search_method:
-        "grid"   — 枚舉所有合法配置（會忽略 max_iterations）
-        "optuna" — Optuna TPE/NSGA-II/Random 建議下一個試驗點
-    optuna_sampler:
-        "tpe" | "nsga2" | "random"（僅 search_method="optuna" 時有效）
-    modes:
-        要搜尋的模式子集，None = 全部（見 search_space.ALL_MODES）
+    sampler: "tpe" (預設) | "nsga2" | "random"
+    modes:   要搜尋的模式子集，None = 全部（見 search_space.ALL_MODES）
     """
 
     def __init__(
         self,
         model_id: str,
         task: str,
-        search_method: str = "optuna",
         max_iterations: int = 20,
         weights: dict = None,
         num_samples: int = None,
@@ -100,7 +122,7 @@ class SystematicOrchestrator:
     ):
         self.model_id = model_id
         self.task = task
-        self.search_method = search_method
+        self.search_method = "optuna"
         self.max_iterations = max_iterations
         self.num_samples = num_samples
         self.cleanup = cleanup
@@ -110,21 +132,14 @@ class SystematicOrchestrator:
         self.best_score = -float("inf")
         self.best_result = None
         self.baseline_metrics = None
-        self._seen_configs: set = set()   # 已嘗試過的 config fingerprint
+        self._seen_configs: set = set()
 
-        # 建立搜尋器
-        if search_method == "grid":
-            self.searcher = GridSearcher(modes=modes)
-            logger.info(f"Grid search 模式：共 {self.searcher.total} 個配置")
-        elif search_method == "optuna":
-            self.searcher = OptunaSearcher(
-                sampler=optuna_sampler, modes=modes, seed=seed,
-                n_startup_trials=n_startup_trials,
-                population_size=population_size,
-            )
-            logger.info(f"Optuna 模式 (sampler={optuna_sampler}, iterations={max_iterations})")
-        else:
-            raise ValueError(f"未知的 search_method: {search_method}，可選 grid/optuna")
+        self.searcher = OptunaSearcher(
+            sampler=optuna_sampler, modes=modes, seed=seed,
+            n_startup_trials=n_startup_trials,
+            population_size=population_size,
+        )
+        logger.info(f"Optuna 模式 (sampler={optuna_sampler}, iterations={max_iterations})")
 
         # 實驗目錄
         model_name = Path(model_id).name
@@ -165,7 +180,8 @@ class SystematicOrchestrator:
                 return cached
 
         logger.info("--- 計算基線指標（無快取，重新評估）---")
-        results = run_evaluation(
+        results = run_isolated(
+            run_evaluation,
             self.model_id, self.task,
             weights=self.weights, baseline_metrics=None,
             num_samples=self.num_samples,
@@ -193,11 +209,7 @@ class SystematicOrchestrator:
 
         trial_dirs = []
 
-        # 決定迭代次數
-        if self.search_method == "grid":
-            total_iters = self.searcher.total
-        else:
-            total_iters = self.max_iterations
+        total_iters = self.max_iterations
 
         _MAX_DUP_RETRIES = 5  # Optuna 重複配置最大重試次數
 
@@ -250,18 +262,18 @@ class SystematicOrchestrator:
             try:
                 if has_sparse:
                     sparse_out = trial_dir if not (has_asvd or has_quant) else str(Path(trial_dir) / "sparse")
-                    current_model = run_sparse(current_model, suggestion, output_dir=sparse_out)
+                    current_model = run_isolated(run_sparse, current_model, suggestion, output_dir=sparse_out)
 
                 if has_asvd:
                     asvd_out = trial_dir if not has_quant else str(Path(trial_dir) / "asvd")
-                    current_model = run_asvd(current_model, suggestion, output_dir=asvd_out)
+                    current_model = run_isolated(run_asvd, current_model, suggestion, output_dir=asvd_out)
 
                 if has_quant:
-                    current_model = run_quantization(current_model, suggestion, output_dir=trial_dir)
+                    current_model = run_isolated(run_quantization, current_model, suggestion, output_dir=trial_dir)
 
             except Exception as e:
                 logger.error(f"壓縮失敗 (iteration {i}): {e}")
-                import traceback; traceback.print_exc()
+                traceback.print_exc()
                 # 回報失敗給 Optuna
                 if self.search_method == "optuna":
                     self.searcher.report_failure()
@@ -287,14 +299,9 @@ class SystematicOrchestrator:
                     current_model = trial_dir
                     logger.info(f"已將模型搬移至 trial_dir: {trial_dir}")
 
-            # Step 4: 清除量化階段殘留的 GPU 記憶體，避免污染 VRAM 量測
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.reset_peak_memory_stats()
-
-            # Step 5: 評估
-            metrics = run_evaluation(
+            # Step 4: 評估（在獨立子進程執行，VRAM 由 OS 保證完整釋放）
+            metrics = run_isolated(
+                run_evaluation,
                 current_model, self.task,
                 weights=self.weights,
                 baseline_metrics=self.baseline_metrics,
@@ -302,9 +309,7 @@ class SystematicOrchestrator:
                 output_dir=str(self.exp_dir),
             )
 
-            # 回報分數給 Optuna（grid search 無需此步）
-            if self.search_method == "optuna":
-                self.searcher.report_score(metrics["score"])
+            self.searcher.report_score(metrics["score"])
 
             trial_data = {
                 "iteration":  i,
@@ -415,11 +420,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Systematic Tuner")
     parser.add_argument("--model_id",    type=str, default="meta-llama/Llama-3.2-1B-Instruct")
     parser.add_argument("--task",        type=str, default="gsm8k")
-    parser.add_argument("--search_method", type=str, default="optuna",
-                        choices=["grid", "optuna"],
-                        help="grid=枚舉所有配置 | optuna=演算法建議")
-    parser.add_argument("--max_iterations", type=int, default=20,
-                        help="Optuna 模式的試驗次數（grid 模式自動枚舉，忽略此值）")
+    parser.add_argument("--max_iterations", type=int, default=20)
     parser.add_argument("--optuna_sampler", type=str, default="tpe",
                         choices=["tpe", "nsga2", "random"])
     parser.add_argument("--modes",       type=str, nargs="*", default=None,
@@ -450,7 +451,6 @@ if __name__ == "__main__":
     orchestrator = SystematicOrchestrator(
         model_id=args.model_id,
         task=args.task,
-        search_method=args.search_method,
         max_iterations=args.max_iterations,
         weights=weights,
         num_samples=args.num_samples,
