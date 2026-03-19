@@ -104,27 +104,59 @@ class StrategySuggestion(BaseModel):
 
     # ── ASVD 參數 ────────────────────────────────────────────────────────────
     alpha: Optional[float] = Field(None, ge=0.3, le=0.7)
-    param_ratio_target: Optional[float] = Field(None, ge=0.7, le=0.99)
+    param_ratio_target: Optional[float] = Field(None, ge=0.70, le=0.99)
     scaling_method: str = Field(default="fisher", description="[abs_mean, abs_max, fisher]")
 
     # ── SparseGPT 參數 ───────────────────────────────────────────────────────
-    sparsity_ratio: Optional[float] = Field(None, description="稀疏比例: [0.3, 0.4, 0.5, 0.6, 0.7]")
+    # 改為連續區間
+    sparsity_ratio: Optional[float] = Field(None, ge=0.3, le=0.7, description="稀疏比例: 0.3 到 0.7 的浮點數")
     sparsity_structure: str = Field(default="2:4", description="結構化稀疏: [2:4, 4:8]")
 
     # ── 量化參數 (由 mode 直接決定方法) ──────────────────────────────────────────
     quant_bits: int = Field(default=4, description="GPTQ:[2,3,4,8] | BNB:[4,8] | AWQ/QQQ:固定4")
-    quant_group_size: int = Field(default=128, description="GPTQ:[16,32,64,128,256] | AWQ:[16,32,64,128] | QQQ:[-1,128]")
+    quant_group_size: int = Field(default=128, description="GPTQ:[-1,16,32,64,128,256] | AWQ:[16,32,64,128] | QQQ:[-1,128]")
     quant_format: str = Field(default="gptq", description="GPTQ:[gptq,gptq_v2]")
-    damp_percent: float = Field(default=0.05, description="GPTQ:[0.005,0.01,0.05,0.1] | QQQ:[0.001,0.005,0.01]")
-    mse: float = Field(default=0.0, description="GPTQ:[0.0,0.01,0.05,0.1]")
-    quant_type: str = Field(default="nf4", description="BNB 專用：[nf4, fp4]")
+    
+    # damp_percent 範圍放寬，交由 LLM 在對應 mode 下生成合理數值
+    damp_percent: float = Field(default=0.05, description="GPTQ:(0.001~0.1) | QQQ:(0.0005~0.05)")
+    
+    # 以下兩個參數固定，不需要 LLM 去猜，但保留欄位供 executors.py 讀取
+    mse: float = Field(default=0.0, description="固定值")
+    quant_type: str = Field(default="nf4", description="固定值")
     use_double_quant: bool = Field(default=False, description="BNB 專用：雙重量化 (僅 bits=4 有效)")
 
     @model_validator(mode="after")
-    def _fix_bnb_double_quant(self):
-        # Changed from quant_method to mode
-        if self.mode in ("bnb", "hybrid_asvd_bnb") and self.quant_bits != 4:
-            self.use_double_quant = False
+    def _validate_mode_constraints(self):
+        # 1. BNB / Hybrid constraints
+        if self.mode in ("bnb", "hybrid_asvd_bnb"):
+            if self.quant_bits not in [4, 8]:
+                raise ValueError(f"BNB requires quant_bits to be 4 or 8, got {self.quant_bits}")
+            if self.quant_bits != 4:
+                self.use_double_quant = False
+
+        # 2. GPTQ constraints
+        elif self.mode == "gptq":
+            if self.quant_bits not in [2, 3, 4, 8]:
+                raise ValueError(f"GPTQ requires quant_bits in [2, 3, 4, 8], got {self.quant_bits}")
+            if self.quant_group_size not in [-1, 16, 32, 64, 128, 256]:
+                raise ValueError(f"GPTQ invalid quant_group_size: {self.quant_group_size}")
+            if not (0.001 <= self.damp_percent <= 0.1):
+                raise ValueError(f"GPTQ damp_percent must be between 0.001 and 0.1, got {self.damp_percent}")
+
+        # 3. AWQ constraints
+        elif self.mode == "awq":
+            self.quant_bits = 4  # AWQ is fixed at 4-bit
+            if self.quant_group_size not in [16, 32, 64, 128]:
+                raise ValueError(f"AWQ invalid quant_group_size: {self.quant_group_size}")
+
+        # 4. QQQ constraints
+        elif self.mode == "qqq":
+            self.quant_bits = 4  # QQQ is fixed at 4-bit
+            if self.quant_group_size not in [-1, 128]:
+                raise ValueError(f"QQQ requires quant_group_size to be -1 or 128, got {self.quant_group_size}")
+            if not (0.0005 <= self.damp_percent <= 0.05):
+                raise ValueError(f"QQQ damp_percent must be between 0.0005 and 0.05, got {self.damp_percent}")
+
         return self
 
     def to_log_dict(self):

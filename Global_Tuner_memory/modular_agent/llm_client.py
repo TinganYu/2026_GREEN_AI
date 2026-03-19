@@ -157,63 +157,98 @@ Model: {self.model_id} | Task: {self.task} | Iteration: {iteration}/{self.max_it
 GOAL: Maximize score = 1.0 + {w_acc}*ln(Acc/Base_acc) + {w_lat}*ln(Base_lat/Lat) + {w_vram}*ln(Base_vram/VRAM) + {w_emit}*ln(Base_emit/Emit)
 Score > 1.0 means improvement over uncompressed baseline. Logarithmic scaling dampens extreme outliers.
 
-=== AVAILABLE MODES ===
-[MODE: asvd_only] Low-rank decomposition → reduces Latency. Often hurts Accuracy; keep param_ratio_target high.
-OUTPUT FORMAT:
+=== AVAILABLE MODES & OUTPUT FORMATS ===
+[MODE: asvd_only] Low-rank decomposition → reduces Latency.
 {{"reasoning": "...", "mode": "asvd_only", 
-    "alpha": 0.5,               // Must be inbetween 0.3 and 0.7
-    "param_ratio_target": 0.90, // Must be inbetween 0.70 and 0.99
-    "scaling_method": "fisher"  // Must be one of: ["abs_mean", "abs_max", "fisher"]
+  "alpha": 0.5,               // Float between 0.3 and 0.7
+  "param_ratio_target": 0.90, // Float between 0.70 and 0.99
+  "scaling_method": "fisher"  // One of: ["abs_mean", "abs_max", "fisher"]
 }}
 
-[MODE: gptq] Hessian-based weight quantization → reduces VRAM. Most compatible (2/3/4/8-bit).
-OUTPUT FORMAT (Strict Search Space):
+[MODE: gptq] Hessian-based weight quantization → reduces VRAM.
 {{"reasoning": "...", "mode": "gptq",
-  "quant_bits": 4,         // Must be one of: [2, 3, 4, 8]
-  "quant_group_size": 128, // Must be one of: [16, 32, 64, 128, 256]
-  "quant_format": "gptq",  // Must be one of: ["gptq", "gptq_v2"]
-  "damp_percent": 0.05,    // Must be one of: [0.005, 0.01, 0.05, 0.1]
-  "mse": 0.0               // Must be one of: [0.0, 0.01, 0.05, 0.1]
+  "quant_bits": 4,         // One of: [2, 3, 4, 8]
+  "quant_group_size": 128, // One of: [-1, 16, 32, 64, 128, 256]
+  "quant_format": "gptq",  // One of: ["gptq", "gptq_v2"]
+  "damp_percent": 0.05     // Float between 0.001 and 0.1 (log scale)
 }}
 
 [MODE: awq] Activation-aware quantization → reduces VRAM.
-OUTPUT FORMAT (Strict Search Space):
 {{"reasoning": "...", "mode": "awq",
-  "quant_group_size": 128  // Must be one of: [16, 32, 64, 128]
+  "quant_group_size": 128  // One of: [16, 32, 64, 128]
 }}
 
 [MODE: qqq] W4A8 quantization.
-OUTPUT FORMAT (Strict Search Space):
 {{"reasoning": "...", "mode": "qqq",
-  "quant_group_size": 128, // Must be one of: [-1, 128]
-  "damp_percent": 0.005    // Must be one of: [0.001, 0.005, 0.01]
+  "quant_group_size": 128, // One of: [-1, 128]
+  "damp_percent": 0.005    // Float between 0.0005 and 0.05 (log scale)
 }}
 
 [MODE: bnb] On-the-fly quantization.
-OUTPUT FORMAT (Strict Search Space):
 {{"reasoning": "...", "mode": "bnb",
-  "quant_bits": 4,         // Must be one of: [4, 8]
+  "quant_bits": 4,         // One of: [4, 8]
   "use_double_quant": false // True only if quant_bits is 4
 }}
 
 [MODE: sparse_unstructured] SparseGPT weight pruning.
-OUTPUT FORMAT (Strict Search Space):
 {{"reasoning": "...", "mode": "sparse_unstructured",
-  "sparsity_ratio": 0.5    // Must be one of: [0.3, 0.4, 0.5, 0.6, 0.7]
+  "sparsity_ratio": 0.5    // Float between 0.3 and 0.7
 }}
 
 [MODE: sparse_structured] Structured sparsity (N:M pattern).
-OUTPUT FORMAT (Strict Search Space):
 {{"reasoning": "...", "mode": "sparse_structured",
-  "sparsity_structure": "2:4" // Must be one of: ["2:4", "4:8"]
+  "sparsity_structure": "2:4" // One of: ["2:4", "4:8"]
 }}
 
 [MODE: hybrid_asvd_bnb] Combine ASVD + BNB.
-OUTPUT FORMAT:
 {{"reasoning": "...", "mode": "hybrid_asvd_bnb",
   "alpha": 0.5, "param_ratio_target": 0.92, "scaling_method": "fisher",
   "quant_bits": 4, "use_double_quant": false
 }}
+
+=== Search Space ===
+Strictly adhere to the parameter ranges and types below. For "log scale" parameters, ensure you explore the smaller magnitude values densely rather than just jumping to the maximum.
+
+### ASVD (Low-Rank Decomposition)
+| Parameter | Type | Range / Options | Description |
+|---|---|---|---|
+| `alpha` | Float (Linear) | 0.3 ~ 0.7 | Activation-aware scaling strength. Higher values preserve the activation distribution more. |
+| `param_ratio_target` | Float (Linear) | 0.70 ~ 0.99 | Target ratio of parameters to keep. Lower values equal heavier compression. |
+| `scaling_method` | Categorical | `abs_mean`, `abs_max`, `fisher` | Singular value scaling method. `fisher` typically yields the best results. |
+
+### GPTQ
+| Parameter | Type | Range / Options | Description |
+|---|---|---|---|
+| `quant_bits` | Categorical | `2, 3, 4, 8` | Quantization bits. 4-bit is the mainstream sweet spot for retaining accuracy. |
+| `quant_group_size` | Categorical | `-1, 16, 32, 64, 128, 256` | Group size. -1 means full matrix. Smaller sizes yield higher precision but larger files. |
+| `quant_format` | Categorical | `gptq`, `gptq_v2` | `gptq_v2` fixes overflow issues present in v1 and is generally preferred. |
+| `damp_percent` | Float (Log) | 0.001 ~ 0.1 | Hessian dampening factor. Recommended exploration range is 0.01~0.05. |
+
+### AWQ
+| Parameter | Type | Range / Options | Description |
+|---|---|---|---|
+| `quant_group_size` | Categorical | `16, 32, 64, 128` | Same logic as GPTQ. (AWQ is fixed at 4-bit). |
+
+### QQQ
+| Parameter | Type | Range / Options | Description |
+|---|---|---|---|
+| `quant_group_size` | Categorical | `-1, 128` | -1 is full matrix (high precision, slower), 128 is standard. (QQQ is fixed at 4-bit). |
+| `damp_percent` | Float (Log) | 0.0005 ~ 0.05 | Hessian dampening factor, similar to GPTQ. |
+
+### BNB (BitsAndBytes)
+| Parameter | Type | Range / Options | Description |
+|---|---|---|---|
+| `quant_bits` | Categorical | `4, 8` | 4-bit aggressively saves VRAM; 8-bit yields higher precision. |
+| `use_double_quant` | Categorical | `False`, `True` | Re-quantizes the quantization constants to save an additional ~0.4 bit/param (only valid if bits=4). |
+
+### SparseGPT
+| Parameter | Type | Range / Options | Description |
+|---|---|---|---|
+| `sparsity_ratio` | Float (Linear) | 0.3 ~ 0.7 | Used for unstructured mode. Ratio of weights to prune (e.g., 0.5 = 50% weights zeroed out). |
+| `sparsity_structure`| Categorical | `2:4`, `4:8` | Used for structured mode. e.g., 2:4 means keeping 2 out of every 4 weights. Hardware-acceleration friendly. |
+
+### Hybrid（ASVD + BNB）
+ASVD same as above + BNB same as above. The two methods are applied sequentially (ASVD first, then BNB), so the search space is effectively the Cartesian product of the two individual spaces.
 
 === CURRENT STATUS ===
 Trial Context ({self.memory_type} mode):
