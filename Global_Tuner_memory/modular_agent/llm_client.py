@@ -17,6 +17,7 @@ class LLMDecisionMaker:
         self.max_iterations = max_iterations
         self.client = OpenAI(api_key=os.getenv("LLM_API_KEY"))
         self.llm_model = os.getenv("LLM_MODEL", "gpt-4o")
+        self.exp_dir = None  # Will be set by the orchestrator when the experiment starts
 
         self.memory_type = memory_type  # 'full', 'window', or 'summary'
         self.knowledge_summary = "No previous summary available."
@@ -331,6 +332,7 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
         import json
         from pydantic import ValidationError
         import logging
+        from datetime import datetime
         logger = logging.getLogger("LLMClient")
         MAX_TURNS = 3 # Turn 1: Tool Call, Turn 2: Tool Call or Answer, Turn 3: Forced Answer
 
@@ -394,6 +396,21 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
                     else:
                         logger.info(f"🔍 Agent requested retrieval for: {query}")
                         retrieval_results = self._execute_retrieve_trials(query, trial_history)
+                        debug_log = {
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "iteration": iteration,
+                            "turn": turn + 1,
+                            "query": query,
+                            "results": retrieval_results
+                        }
+                        
+                        # Use the specific experiment directory instead of the root!
+                        if hasattr(self, 'exp_dir'):
+                            log_path = self.exp_dir / "tool_debug_log.jsonl"
+                            with open(log_path, "a", encoding="utf-8") as f:
+                                f.write(json.dumps(debug_log, ensure_ascii=False) + "\n")
+                        else:
+                            logger.warning("No exp_dir set for LLMDecisionMaker; skipping tool log.")
                     
                     messages.append({
                         "role": "tool",

@@ -96,7 +96,7 @@ def _make_trial_name(i: int, suggestion) -> str:
 class OptimizationOrchestrator:
     def __init__(self, model_id: str, task: str, max_iterations: int = 10,
                  weights: dict = None, num_samples: int = None,
-                 cleanup: bool = True, keep_best: bool = True, memory_type: str = "full"):
+                 cleanup: bool = True, keep_best: bool = True, memory_type: str = "full", base_dir: Path = None):
         self.model_id = model_id
         self.task = task
         self.max_iterations = max_iterations
@@ -117,9 +117,12 @@ class OptimizationOrchestrator:
         model_name = Path(model_id).name
         task_str = task.replace(",", "_")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.exp_dir = _ROOT_DIR / "tuning_results" / f"exp_{model_name}_{task_str}_{ts}"
+        parent_dir = base_dir if base_dir else _ROOT_DIR / "tuning_results"
+        self.exp_dir = parent_dir / f"exp_{model_name}_{task_str}_{memory_type}_{ts}" # Optional: added memory_type to folder name for clarity
+        # self.exp_dir = _ROOT_DIR / "tuning_results" / f"exp_{model_name}_{task_str}_{ts}"
         self.exp_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"實驗目錄: {self.exp_dir}")
+        self.llm.exp_dir = self.exp_dir
 
         # baseline 快取目錄：tuning_results/baselines/{model_name}_{task}.json
         self._baseline_cache_dir = _ROOT_DIR / "tuning_results" / "baselines"
@@ -567,7 +570,7 @@ if __name__ == "__main__":
         "vram": args.vram_weight, "emit": args.emit_weight,
     }
     if args.benchmark_runs > 1:
-        memory_modes = ["full", "window", "summary", "tool"]
+        memory_modes = [ "window", "summary", "tool"] #"full" 先不用，太久
         descriptions = {
             "full": "全部實驗結果", 
             "window": "最近 5 個", 
@@ -578,7 +581,10 @@ if __name__ == "__main__":
         
         # 1. Prepare a file to save incremental results so data isn't lost if it crashes late
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_path = _ROOT_DIR / "tuning_results" / f"benchmark_report_{ts}.md"
+        master_bench_dir = _ROOT_DIR / "tuning_results" / f"benchmark_{ts}"
+        master_bench_dir.mkdir(parents=True, exist_ok=True)
+        
+        report_path = master_bench_dir / "benchmark_report.md" # Save inside master folder
         
         with open(report_path, "w", encoding="utf-8") as f:
             f.write(f"# Green AI Memory Benchmark ({args.benchmark_runs} runs per type)\n\n")
@@ -601,7 +607,8 @@ if __name__ == "__main__":
                         args.model_id, args.task, args.max_iterations, weights,
                         num_samples=args.num_samples,
                         cleanup=args.cleanup, keep_best=args.keep_best,
-                        memory_type=mode
+                        memory_type=mode,
+                        base_dir=master_bench_dir
                     )
                     orch.optimize()
                     
