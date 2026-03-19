@@ -41,7 +41,7 @@
 |------|------|------------|------|------|
 | `quant_bits` | — | 固定 4 | 4 | QQQ 只支援 4bit |
 | `quant_group_size` | categorical | `-1, 128` | 128 | -1=全矩陣（精度高但慢），128=常規 |
-| `damp_percent` | float **log** | 0.0005 ~ 0.05 | 0.01 | 同 GPTQ dampening；log scale |
+| `damp_percent` | float **log** | 0.0005 ~ 0.05 | 0.005 | 同 GPTQ dampening；log scale |
 
 ### BNB（BitsAndBytes）
 
