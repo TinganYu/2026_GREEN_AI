@@ -23,9 +23,16 @@ from .executors import run_asvd, run_sparse, run_quantization, run_evaluation
 
 # ── Process Isolation（從 Global_Tuner_v2 移植）────────────────────────────
 def _worker(queue, func, *args, **kwargs):
+    import torch
     try:
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
         result = func(*args, **kwargs)
-        queue.put({"status": "success", "result": result})
+        peak_mb = (
+            torch.cuda.max_memory_allocated() / (1024 ** 2)
+            if torch.cuda.is_available() else 0.0
+        )
+        queue.put({"status": "success", "result": result, "peak_vram_mb": peak_mb})
     except Exception as e:
         queue.put({"status": "error", "error": str(e), "traceback": traceback.format_exc()})
 
@@ -33,6 +40,9 @@ def run_isolated(func, *args, **kwargs):
     """
     在獨立的 spawn 子進程中執行函式。
     子進程結束後 OS 保證 100% 釋放所有 VRAM，根本解決記憶體殘留問題。
+
+    Returns:
+        (result, peak_vram_mb): 函式回傳值 + 子進程內的 GPU peak（MB）
     """
     ctx = mp.get_context('spawn')
     queue = ctx.Queue()
@@ -43,7 +53,7 @@ def run_isolated(func, *args, **kwargs):
     if not queue.empty():
         res = queue.get()
         if res["status"] == "success":
-            return res["result"]
+            return res["result"], res.get("peak_vram_mb", 0.0)
         else:
             raise RuntimeError(f"Isolated process failed:\n{res['error']}\n{res['traceback']}")
     else:
@@ -147,7 +157,7 @@ class SystematicOrchestrator:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.exp_dir = (
             _ROOT_DIR / "systematic_results"
-            / f"{search_method}_{model_name}_{task_str}_{ts}"
+            / f"{self.search_method}_{model_name}_{task_str}_{ts}"
         )
         self.exp_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"實驗目錄: {self.exp_dir}")
@@ -180,13 +190,14 @@ class SystematicOrchestrator:
                 return cached
 
         logger.info("--- 計算基線指標（無快取，重新評估）---")
-        results = run_isolated(
+        results, baseline_vram_mb = run_isolated(
             run_evaluation,
             self.model_id, self.task,
             weights=self.weights, baseline_metrics=None,
             num_samples=self.num_samples,
             output_dir=str(self._baseline_cache_dir),
         )
+        logger.info(f"Baseline 壓縮過程 GPU peak: {baseline_vram_mb:.1f} MB")
         cache_entry = {
             "model_id": self.model_id,
             "task": self.task,
@@ -259,17 +270,24 @@ class SystematicOrchestrator:
             has_asvd  = suggestion.mode in ("asvd_only", "hybrid") and suggestion.alpha is not None
             has_quant = suggestion.mode in ("quant_only", "hybrid") and suggestion.quant_method != "none"
 
+            compression_vram = {}
             try:
                 if has_sparse:
                     sparse_out = trial_dir if not (has_asvd or has_quant) else str(Path(trial_dir) / "sparse")
-                    current_model = run_isolated(run_sparse, current_model, suggestion, output_dir=sparse_out)
+                    current_model, _mb = run_isolated(run_sparse, current_model, suggestion, output_dir=sparse_out)
+                    compression_vram["sparse_mb"] = round(_mb, 1)
+                    logger.info(f"Sparse GPU peak: {_mb:.1f} MB")
 
                 if has_asvd:
                     asvd_out = trial_dir if not has_quant else str(Path(trial_dir) / "asvd")
-                    current_model = run_isolated(run_asvd, current_model, suggestion, output_dir=asvd_out)
+                    current_model, _mb = run_isolated(run_asvd, current_model, suggestion, output_dir=asvd_out)
+                    compression_vram["asvd_mb"] = round(_mb, 1)
+                    logger.info(f"ASVD GPU peak: {_mb:.1f} MB")
 
                 if has_quant:
-                    current_model = run_isolated(run_quantization, current_model, suggestion, output_dir=trial_dir)
+                    current_model, _mb = run_isolated(run_quantization, current_model, suggestion, output_dir=trial_dir)
+                    compression_vram["quant_mb"] = round(_mb, 1)
+                    logger.info(f"Quantization GPU peak: {_mb:.1f} MB")
 
             except Exception as e:
                 logger.error(f"壓縮失敗 (iteration {i}): {e}")
@@ -300,7 +318,7 @@ class SystematicOrchestrator:
                     logger.info(f"已將模型搬移至 trial_dir: {trial_dir}")
 
             # Step 4: 評估（在獨立子進程執行，VRAM 由 OS 保證完整釋放）
-            metrics = run_isolated(
+            metrics, eval_vram_mb = run_isolated(
                 run_evaluation,
                 current_model, self.task,
                 weights=self.weights,
@@ -308,6 +326,8 @@ class SystematicOrchestrator:
                 num_samples=self.num_samples,
                 output_dir=str(self.exp_dir),
             )
+            compression_vram["eval_mb"] = round(eval_vram_mb, 1)
+            logger.info(f"Evaluation GPU peak: {eval_vram_mb:.1f} MB")
 
             self.searcher.report_score(metrics["score"])
 
@@ -317,6 +337,7 @@ class SystematicOrchestrator:
                 "config":     suggestion.to_log_dict(),
                 "suggestion": raw_output,
                 "metrics":    metrics,
+                "compression_vram_mb": compression_vram,
                 "model_path": str(current_model),
                 "trial_dir":  trial_dir,
             }
