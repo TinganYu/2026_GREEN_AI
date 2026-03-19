@@ -114,7 +114,7 @@ class StrategySuggestion(BaseModel):
 
     # ── 量化參數 (由 mode 直接決定方法) ──────────────────────────────────────────
     quant_bits: int = Field(default=4, description="GPTQ:[2,3,4,8] | BNB:[4,8] | AWQ/QQQ:固定4")
-    quant_group_size: int = Field(default=128, description="GPTQ:[-1,16,32,64,128,256] | AWQ:[16,32,64,128] | QQQ:[-1,128]")
+    quant_group_size: int = Field(default=128, description="GPTQ:[16,32,64,128,256] | AWQ:[16,32,64,128] | QQQ:[-1,128]")
     quant_format: str = Field(default="gptq", description="GPTQ:[gptq,gptq_v2]")
     
     # damp_percent 範圍放寬，交由 LLM 在對應 mode 下生成合理數值
@@ -138,7 +138,7 @@ class StrategySuggestion(BaseModel):
         elif self.mode == "gptq":
             if self.quant_bits not in [2, 3, 4, 8]:
                 raise ValueError(f"GPTQ requires quant_bits in [2, 3, 4, 8], got {self.quant_bits}")
-            if self.quant_group_size not in [-1, 16, 32, 64, 128, 256]:
+            if self.quant_group_size not in [16, 32, 64, 128, 256]:
                 raise ValueError(f"GPTQ invalid quant_group_size: {self.quant_group_size}")
             if not (0.001 <= self.damp_percent <= 0.1):
                 raise ValueError(f"GPTQ damp_percent must be between 0.001 and 0.1, got {self.damp_percent}")

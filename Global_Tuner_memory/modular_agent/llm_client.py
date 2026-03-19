@@ -169,7 +169,7 @@ Score > 1.0 means improvement over uncompressed baseline. Logarithmic scaling da
 [MODE: gptq] Hessian-based weight quantization → reduces VRAM.
 {{"reasoning": "...", "mode": "gptq",
   "quant_bits": 4,         // One of: [2, 3, 4, 8]
-  "quant_group_size": 128, // One of: [-1, 16, 32, 64, 128, 256]
+  "quant_group_size": 128, // One of: [16, 32, 64, 128, 256]
   "quant_format": "gptq",  // One of: ["gptq", "gptq_v2"]
   "damp_percent": 0.05     // Float between 0.001 and 0.1 (log scale)
 }}
@@ -221,7 +221,7 @@ Strictly adhere to the parameter ranges and types below. For "log scale" paramet
 | Parameter | Type | Range / Options | Description |
 |---|---|---|---|
 | `quant_bits` | Categorical | `2, 3, 4, 8` | Quantization bits. 4-bit is the mainstream sweet spot for retaining accuracy. |
-| `quant_group_size` | Categorical | `-1, 16, 32, 64, 128, 256` | Group size. -1 means full matrix. Smaller sizes yield higher precision but larger files. |
+| `quant_group_size` | Categorical | `16, 32, 64, 128, 256` | Group size. -1 means full matrix. Smaller sizes yield higher precision but larger files. |
 | `quant_format` | Categorical | `gptq`, `gptq_v2` | `gptq_v2` fixes overflow issues present in v1 and is generally preferred. |
 | `damp_percent` | Float (Log) | 0.001 ~ 0.1 | Hessian dampening factor. Recommended exploration range is 0.01~0.05. |
 
