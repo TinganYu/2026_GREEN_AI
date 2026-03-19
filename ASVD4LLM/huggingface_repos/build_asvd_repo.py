@@ -317,7 +317,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--rank_align",
         type=int,
-        default=128,
+        default=32,
         help="align rank in SVD",
     )
     parser.add_argument(
