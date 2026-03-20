@@ -16,7 +16,7 @@ ASVD_SPACE = {
 
 # ── GPTQ ──────────────────────────────────────────────────────────────────────
 GPTQ_SPACE = {
-    "quant_bits":       [2, 3, 4, 8],                      # categorical（只有這些合法值）
+    "quant_bits":       [3, 4, 8],                      # categorical（只有這些合法值）
     "quant_group_size": [16, 32, 64, 128, 256],             # categorical（須為 2 的冪次；-1 不相容 GAR）
     "quant_format":     ["gptq", "gptq_v2"],               # categorical
     "damp_percent":     (0.001, 0.1, "log"),               # log：0.001↔0.01 和 0.01↔0.1 各佔一半探索量
