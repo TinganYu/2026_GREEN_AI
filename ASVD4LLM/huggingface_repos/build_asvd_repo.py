@@ -125,7 +125,7 @@ def main(args):
             model = awq_quant_sequential(model, tokenizer, 8)
         elif args.weight_quant == "awq_int4":
             model = awq_quant_sequential(model, tokenizer, 4)
-# Optional verification check
+    # Optional verification check
     sample_layer = model.model.layers[0].self_attn.q_proj
     if isinstance(sample_layer, SVDLinear):
         # We must check the weights INSIDE the SVD components
@@ -133,10 +133,11 @@ def main(args):
         b_unique = len(torch.unique(sample_layer.BLinear.weight))
         print(f"✅ ALinear unique values: {a_unique}") # Expect <= 256
         print(f"✅ BLinear unique values: {b_unique}") # Expect <= 256
+        print(f"ALinear dtype: {sample_layer.ALinear.weight.dtype}")
     else:
         u_count = len(torch.unique(sample_layer.weight))
         print(f"Standard Linear unique values: {u_count}")
-    print(sample_layer.ALinear.weight.dtype)
+        print(f"Standard dtype: {sample_layer.weight.dtype}")
 
     new_params = sum(p.numel() for p in model.parameters())
     actual_ratio = new_params / orig_params
