@@ -103,7 +103,8 @@ class StrategySuggestion(BaseModel):
     mode: str = Field(..., description="[asvd_only, gptq, awq, qqq, bnb, sparse_unstructured, sparse_structured, hybrid_asvd_bnb]")
 
     # ── ASVD 參數 ────────────────────────────────────────────────────────────
-    alpha: Optional[float] = Field(None, ge=0.3, le=0.7)
+    # alpha: Optional[float] = Field(None, ge=0.3, le=0.7)
+    alpha: Optional[float] = Field(None, description="[0.3, 0.4, 0.5, 0.6, 0.7]")
     param_ratio_target: Optional[float] = Field(None, ge=0.70, le=0.99)
     scaling_method: str = Field(default="fisher", description="[abs_mean, abs_max, fisher]")
 
@@ -156,6 +157,15 @@ class StrategySuggestion(BaseModel):
                 raise ValueError(f"QQQ requires quant_group_size to be -1 or 128, got {self.quant_group_size}")
             if not (0.0005 <= self.damp_percent <= 0.05):
                 raise ValueError(f"QQQ damp_percent must be between 0.0005 and 0.05, got {self.damp_percent}")
+            
+        # 5. ASVD constraints
+        if self.mode in ("asvd_only", "hybrid_asvd_bnb"):
+            if self.alpha is not None and self.alpha not in [0.3, 0.4, 0.5, 0.6, 0.7]:  #預設0.5
+                raise ValueError(f"ASVD requires alpha in [0.3, 0.4, 0.5, 0.6, 0.7], got {self.alpha}")
+            if self.param_ratio_target is not None and not (0.70 <= self.param_ratio_target <= 0.99):  #預設-1(找ppl表現最好?)
+                raise ValueError(f"ASVD requires param_ratio_target between 0.70 and 0.99, got {self.param_ratio_target}")
+            if self.scaling_method not in ("abs_mean", "abs_max", "fisher"):
+                raise ValueError(f"ASVD invalid scaling_method: {self.scaling_method}")
 
         return self
 

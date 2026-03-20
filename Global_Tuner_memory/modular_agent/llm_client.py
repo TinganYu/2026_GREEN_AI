@@ -161,7 +161,7 @@ Score > 1.0 means improvement over uncompressed baseline. Logarithmic scaling da
 === AVAILABLE MODES & OUTPUT FORMATS ===
 [MODE: asvd_only] Low-rank decomposition → reduces Latency.
 {{"reasoning": "...", "mode": "asvd_only", 
-  "alpha": 0.5,               // Float between 0.3 and 0.7
+  "alpha": 0.5,               // Must be one of: [0.3, 0.4, 0.5, 0.6, 0.7]
   "param_ratio_target": 0.90, // Float between 0.70 and 0.99
   "scaling_method": "fisher"  // One of: ["abs_mean", "abs_max", "fisher"]
 }}
@@ -213,7 +213,7 @@ Strictly adhere to the parameter ranges and types below. For "log scale" paramet
 ### ASVD (Low-Rank Decomposition)
 | Parameter | Type | Range / Options | Description |
 |---|---|---|---|
-| `alpha` | Float (Linear) | 0.3 ~ 0.7 | Activation-aware scaling strength. Higher values preserve the activation distribution more. |
+| `alpha` | Categorical | `0.3, 0.4, 0.5, 0.6, 0.7` | Activation-aware scaling strength. Higher values preserve the activation distribution more. |
 | `param_ratio_target` | Float (Linear) | 0.70 ~ 0.99 | Target ratio of parameters to keep. Lower values equal heavier compression. |
 | `scaling_method` | Categorical | `abs_mean`, `abs_max`, `fisher` | Singular value scaling method. `fisher` typically yields the best results. |
 
