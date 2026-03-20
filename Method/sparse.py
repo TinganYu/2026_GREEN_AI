@@ -47,7 +47,7 @@ class SparseConfig:
 
     # 輸出設定
     output_dir: Optional[str] = None
-    save_compressed: bool = True
+    save_compressed: bool = False  # True 會在儲存時計算 sparsity，容易 OOM
 
 
 def run_sparse(model_path: str, config: SparseConfig) -> str:

@@ -53,7 +53,7 @@ class OptunaSearcher:
         self,
         sampler: str = "tpe",
         modes: Optional[List[str]] = None,
-        seed: int = 42,
+        seed: Optional[int] = None,
         n_startup_trials: int = 10,
         population_size: int = 50,
     ):

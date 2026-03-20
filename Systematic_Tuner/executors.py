@@ -96,78 +96,36 @@ def run_quantization(model_path: str, suggestion, output_dir: Optional[str] = No
         use_double_quant=suggestion.use_double_quant or False,
         output_dir=output_dir,
     )
-    return _run_quantization(model_path, config)
+    return _run_quantization(model_path, config, output_dir=output_dir)
 
 
 # ============================================================================
 # 評估函數（直接呼叫 Evals/ 評估器）
 # ============================================================================
 
-def _load_model_for_eval(model_path: str):
-    """
-    載入模型供評估使用。
-    自動偵測量化類型（GPTQModel 統一處理 gptq/awq/qqq，其餘使用 transformers）。
-    """
-    from transformers import AutoTokenizer
-    import torch
-
-    quant_type = _detect_quantization_type(model_path)
-    logger.info(f"偵測到量化類型: {quant_type}")
-
-    if quant_type in ("gptq", "awq", "qqq"):
-        from gptqmodel import GPTQModel
-        logger.info(f"使用 GPTQModel.from_quantized() 載入: {model_path}")
-        model = GPTQModel.from_quantized(
-            model_path,
-            device_map={"": "cuda:0"},
-        )
-    else:
-        from transformers import AutoModelForCausalLM
-        import json
-        config_path = Path(model_path) / "config.json"
-        if config_path.exists():
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    config_data = json.load(f)
-
-                # 修復純稀疏模型的 buggy compressed-tensors config
-                q_config = config_data.get("quantization_config", {})
-                if (q_config.get("quant_method") == "compressed-tensors"
-                        and "sparsity_config" in q_config
-                        and "config_groups" not in q_config):
-                    logger.info("修復 config.json：移除 buggy quantization_config")
-                    del config_data["quantization_config"]
-                    with open(config_path, "w", encoding="utf-8") as f:
-                        json.dump(config_data, f, indent=2)
-            except Exception as e:
-                logger.warning(f"無法修復 config.json: {e}")
-            logger.info(f"使用 AutoModelForCausalLM 載入: {model_path}")
-
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            device_map={"": "cuda:0"},
-            torch_dtype=torch.float16,
-            trust_remote_code=True,
-        )
-
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.unk_token or tokenizer.eos_token
-
-    return model, tokenizer
-
 
 def _detect_quantization_type(model_path: str) -> Optional[str]:
-    """從 config.json 或路徑名稱偵測量化類型"""
+    """從 bnb_config.json / config.json / 路徑名稱偵測量化類型"""
     import json
+    # BNB metadata（_run_bnb 寫入，不存模型權重）
+    bnb_meta_path = Path(model_path) / "bnb_config.json"
+    if bnb_meta_path.exists():
+        return "bnb"
+
     config_path = Path(model_path) / "config.json"
     if config_path.exists():
         try:
             with open(config_path, "r") as f:
                 cfg = json.load(f)
-            quant_type = cfg.get("quantization_config", {}).get("quant_type", "")
-            if quant_type:
-                return quant_type.lower()
+            q = cfg.get("quantization_config", {})
+            # GPTQ / AWQ / QQQ
+            quant_type = q.get("quant_type", "").lower()
+            if quant_type in ("gptq", "awq", "qqq"):
+                return quant_type
+            # 舊版 BNB（有存模型時）
+            if (q.get("quant_method", "").lower() == "bitsandbytes"
+                    or q.get("load_in_4bit") or q.get("load_in_8bit")):
+                return "bnb"
         except Exception:
             pass
     # 從路徑名稱推斷
@@ -193,7 +151,8 @@ def _build_eval_config(model_path: str, output_dir: str = "results", num_samples
 
 
 def run_evaluation(model_path: str, tasks, weights: dict, baseline_metrics: dict = None,
-                   num_samples: Optional[int] = None, output_dir: Optional[str] = None) -> dict:
+                   num_samples: Optional[int] = None, output_dir: Optional[str] = None,
+                   pen_t: float = 0.15, pen_a: float = 10.0) -> dict:
     """
     直接呼叫 Evals/ 評估器，無需 subprocess。
     通常透過 run_isolated() 在子進程執行，子進程結束後 OS 保證 VRAM 完整釋放。
@@ -219,23 +178,37 @@ def run_evaluation(model_path: str, tasks, weights: dict, baseline_metrics: dict
     import gc
     import torch
 
+    import json as _json
+
     if isinstance(tasks, str):
         tasks_list = [t.strip() for t in tasks.split(",")]
     else:
         tasks_list = list(tasks)
 
-    # 載入模型一次，所有 dataset 重複使用
-    logger.info(f"載入模型: {model_path}")
-    model, tokenizer = _load_model_for_eval(model_path)
+    # 偵測量化類型
+    quant_type = _detect_quantization_type(model_path)
+    logger.info(f"偵測到量化類型: {quant_type}，準備載入模型: {model_path}")
+
+    # BNB：從 bnb_config.json 讀取參數，用原始模型路徑評估
+    bnb_meta = None
+    eval_model_path = model_path
+    if quant_type == "bnb":
+        bnb_meta_path = Path(model_path) / "bnb_config.json"
+        with open(bnb_meta_path, "r", encoding="utf-8") as f:
+            bnb_meta = _json.load(f)
+        eval_model_path = bnb_meta["original_model"]
+        logger.info(f"BNB 模式：從原始模型載入 {eval_model_path}")
 
     eval_out = output_dir or str(_ROOT_DIR / "tuning_results")
-    config = _build_eval_config(model_path, output_dir=eval_out, num_samples=num_samples)
+    config = _build_eval_config(eval_model_path, output_dir=eval_out, num_samples=num_samples)
     all_task_results = {}
     total_acc = 0.0
     total_lat = 0.0
     total_emit = 0.0
     vram_list = []
     evaluator = None
+    shared_model = None
+    shared_tokenizer = None
 
     for task in tasks_list:
         logger.info("=" * 50)
@@ -250,11 +223,47 @@ def run_evaluation(model_path: str, tasks, weights: dict, baseline_metrics: dict
             evaluator_cls = EVALUATOR_MAP[task]
             evaluator = evaluator_cls(config)
 
-            # 注入已載入的 model 和 tokenizer，避免重複載入
-            evaluator.model = model
-            evaluator.tokenizer = tokenizer
-            evaluator._use_vllm = False
-            evaluator._setup_generation_pipeline()
+            if shared_model is None:
+                if bnb_meta is not None:
+                    # BNB：直接用 metadata 參數載入，不走 base_evaluator._load_bnb_model()
+                    # 因為原始模型的 config.json 沒有 BNB quantization_config
+                    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+                    dtype_map = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
+                    bnb_cfg = BitsAndBytesConfig(
+                        load_in_4bit=(bnb_meta["bits"] == 4),
+                        load_in_8bit=(bnb_meta["bits"] == 8),
+                        bnb_4bit_quant_type=bnb_meta.get("quant_type", "nf4"),
+                        bnb_4bit_use_double_quant=bnb_meta.get("use_double_quant", False),
+                        bnb_4bit_compute_dtype=dtype_map.get(
+                            bnb_meta.get("compute_dtype", "bfloat16"), torch.bfloat16
+                        ),
+                    )
+                    shared_model = AutoModelForCausalLM.from_pretrained(
+                        eval_model_path,
+                        quantization_config=bnb_cfg,
+                        device_map={"": "cuda:0"},
+                        trust_remote_code=True,
+                    )
+                    shared_tokenizer = AutoTokenizer.from_pretrained(eval_model_path)
+                    if shared_tokenizer.pad_token is None:
+                        shared_tokenizer.pad_token = (
+                            shared_tokenizer.unk_token or shared_tokenizer.eos_token
+                        )
+                    evaluator.model = shared_model
+                    evaluator.tokenizer = shared_tokenizer
+                    evaluator._use_vllm = False
+                    evaluator._setup_generation_pipeline()
+                else:
+                    # 其他量化類型：讓 base_evaluator.load_model() 處理
+                    evaluator.load_model(quant_type)
+                    shared_model = evaluator.model
+                    shared_tokenizer = evaluator.tokenizer
+            else:
+                # 後續 task：注入已載入的 model / tokenizer
+                evaluator.model = shared_model
+                evaluator.tokenizer = shared_tokenizer
+                evaluator._use_vllm = False
+                evaluator._setup_generation_pipeline()
 
             results = evaluator.evaluate()
             evaluator.save_results(results)
@@ -309,12 +318,19 @@ def run_evaluation(model_path: str, tasks, weights: dict, baseline_metrics: dict
     norm_vram = base_vram / (max_vram + 1e-6)
     norm_emit = base_emit / (avg_emit  + 1e-6)
 
-    final_score = 1.0 + (
+    weight_score = 1.0 + (
         weights.get("acc",  0.0) * math.log(norm_acc  + 1e-9) +
         weights.get("lat",  0.0) * math.log(norm_lat  + 1e-9) +
         weights.get("vram", 0.0) * math.log(norm_vram + 1e-9) +
         weights.get("emit", 0.0) * math.log(norm_emit + 1e-9)
     )
+
+    # Accuracy penalty: a * max(0, (base_acc - t) - acc)
+    penalty = pen_a * max(0.0, (base_acc - pen_t) - avg_acc)
+    final_score = weight_score - penalty
+    if penalty > 0:
+        logger.info(f"Accuracy penalty 觸發: {penalty:.4f} "
+                    f"(threshold={base_acc - pen_t:.4f}, acc={avg_acc:.4f})")
 
     return {
         "accuracy": avg_acc, "latency": avg_lat, "vram": max_vram, "emissions": avg_emit,

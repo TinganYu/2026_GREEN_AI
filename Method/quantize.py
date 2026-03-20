@@ -14,6 +14,7 @@
 """
 
 import gc
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -47,8 +48,9 @@ class QuantConfig:
     sym: bool = True
 
     # BNB 專用
-    quant_type: str = "nf4"    # "nf4" | "fp4"
+    quant_type: str = "nf4"          # "nf4" | "fp4"
     use_double_quant: bool = False
+    bnb_compute_dtype: str = "bfloat16"  # 4bit 推理時的計算精度："bfloat16" | "float16" | "float32"
 
     # 校準設定（gptq / awq / qqq 使用）
     calib_dataset: str = "openai/gsm8k"
@@ -66,12 +68,12 @@ class QuantConfig:
 # 公開介面
 # ============================================================================
 
-def run_quantization(model_path: str, config: QuantConfig) -> str:
+def run_quantization(model_path: str, config: QuantConfig, output_dir: Optional[str] = None) -> str:
     """
     執行量化。
 
     Returns:
-        量化後模型的本地路徑（BNB 模式回傳原路徑，on-the-fly 不儲存）
+        量化後模型的本地路徑
     """
     method = config.method.lower()
     logger.info(f"--- 執行量化: {method} ({config.bits} bits) ---")
@@ -80,7 +82,7 @@ def run_quantization(model_path: str, config: QuantConfig) -> str:
     if method in ("gptq", "awq", "qqq"):
         return _run_gptqmodel(model_path, config)
     elif method == "bnb":
-        return _run_bnb(model_path, config)
+        return _run_bnb(model_path, config, output_dir=output_dir)
     else:
         raise ValueError(f"不支援的量化方法: {method}。支援: gptq, awq, qqq, bnb")
 
@@ -88,11 +90,14 @@ def run_quantization(model_path: str, config: QuantConfig) -> str:
 def get_bnb_load_kwargs(config: QuantConfig) -> dict:
     """取得 BNB 載入所需的 kwargs，供 executor 注入到 AutoModelForCausalLM。"""
     from transformers import BitsAndBytesConfig
+    dtype_map = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
+    compute_dtype = dtype_map.get(config.bnb_compute_dtype, torch.bfloat16)
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=(config.bits == 4),
         load_in_8bit=(config.bits == 8),
         bnb_4bit_quant_type=config.quant_type,
         bnb_4bit_use_double_quant=config.use_double_quant,
+        bnb_4bit_compute_dtype=compute_dtype,
     )
     return {"quantization_config": bnb_config}
 
@@ -193,11 +198,32 @@ def _run_gptqmodel(model_path: str, config: QuantConfig) -> str:
     return output_dir
 
 
-def _run_bnb(model_path: str, config: QuantConfig) -> str:
-    """BNB on-the-fly 量化（不儲存），回傳原路徑供 executor 以 BNB 載入。"""
-    logger.info("BNB 為 on-the-fly 量化，不預先儲存")
-    logger.info(f"路徑: {model_path} | {config.bits}bit / {config.quant_type}")
-    return model_path
+def _run_bnb(model_path: str, config: QuantConfig, output_dir: Optional[str] = None) -> str:
+    """
+    BNB 不儲存模型權重（on-the-fly 量化，存模型無意義）。
+    只在 output_dir 寫 bnb_config.json 記錄量化參數，
+    eval 時從 bnb_config.json 讀取並以原始路徑載入。
+    """
+    if output_dir is None:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        model_name = Path(model_path).name
+        output_dir = str(Path("quantized") / f"{model_name}_bnb_{config.bits}bit_{ts}")
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    bnb_meta = {
+        "original_model": str(model_path),
+        "bits": config.bits,
+        "quant_type": config.quant_type,
+        "use_double_quant": config.use_double_quant,
+        "compute_dtype": config.bnb_compute_dtype,
+    }
+    meta_path = Path(output_dir) / "bnb_config.json"
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(bnb_meta, f, indent=2)
+
+    logger.info(f"BNB metadata 已存至: {meta_path}")
+    return output_dir
 
 
 def _load_tokenizer(model_path: str):

@@ -9,8 +9,8 @@
 
 # ── ASVD ──────────────────────────────────────────────────────────────────────
 ASVD_SPACE = {
-    "alpha":              (0.3, 0.7),                      # linear：範圍均勻，linear OK
-    "param_ratio_target": (0.70, 0.99),                    # linear：範圍均勻，linear OK
+    "alpha":              [0.3, 0.4, 0.5, 0.6, 0.7],      # categorical：命中 sensitivity cache，相同值不重算
+    "param_ratio_target": (0.70, 0.99),                    # linear：不在 cache key，改 continuous 讓 TPE 細搜
     "scaling_method":     ["abs_mean", "abs_max", "fisher"],
 }
 

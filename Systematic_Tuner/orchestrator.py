@@ -126,9 +126,11 @@ class SystematicOrchestrator:
         keep_best: bool = True,
         optuna_sampler: str = "tpe",
         modes: list = None,
-        seed: int = 42,
+        seed: int = None,
         n_startup_trials: int = 10,
         population_size: int = 50,
+        pen_t: float = 0.15,
+        pen_a: float = 10.0,
     ):
         self.model_id = model_id
         self.task = task
@@ -137,7 +139,9 @@ class SystematicOrchestrator:
         self.num_samples = num_samples
         self.cleanup = cleanup
         self.keep_best = keep_best
-        self.weights = weights or {"acc": 0.5, "lat": 0.1, "vram": 0.2, "emit": 0.2}
+        self.weights = weights or {"acc": 3.0, "lat": 1.0, "vram": 1.0, "emit": 1.0}
+        self.pen_t = pen_t
+        self.pen_a = pen_a
         self.trial_history = []
         self.best_score = -float("inf")
         self.best_result = None
@@ -196,6 +200,7 @@ class SystematicOrchestrator:
             weights=self.weights, baseline_metrics=None,
             num_samples=self.num_samples,
             output_dir=str(self._baseline_cache_dir),
+            pen_t=self.pen_t, pen_a=self.pen_a,
         )
         logger.info(f"Baseline 壓縮過程 GPU peak: {baseline_vram_mb:.1f} MB")
         cache_entry = {
@@ -325,6 +330,7 @@ class SystematicOrchestrator:
                 baseline_metrics=self.baseline_metrics,
                 num_samples=self.num_samples,
                 output_dir=str(self.exp_dir),
+                pen_t=self.pen_t, pen_a=self.pen_a,
             )
             compression_vram["eval_mb"] = round(eval_vram_mb, 1)
             logger.info(f"Evaluation GPU peak: {eval_vram_mb:.1f} MB")
@@ -448,11 +454,16 @@ if __name__ == "__main__":
                         metavar="MODE",
                         help=f"要搜尋的模式子集，可選: {ALL_MODES}")
     parser.add_argument("--num_samples", type=int, default=None)
-    parser.add_argument("--acc_weight",  type=float, default=0.6)
-    parser.add_argument("--lat_weight",  type=float, default=0.1)
-    parser.add_argument("--vram_weight", type=float, default=0.1)
-    parser.add_argument("--emit_weight", type=float, default=0.2)
-    parser.add_argument("--seed",             type=int,   default=42)
+    parser.add_argument("--acc_weight",  type=float, default=3.0)
+    parser.add_argument("--lat_weight",  type=float, default=1.0)
+    parser.add_argument("--vram_weight", type=float, default=1.0)
+    parser.add_argument("--emit_weight", type=float, default=1.0)
+    parser.add_argument("--pen_t",       type=float, default=0.15,
+                        help="Accuracy penalty 容忍量（絕對值，掉幅超過此值才扣分）")
+    parser.add_argument("--pen_a",       type=float, default=10.0,
+                        help="Accuracy penalty 放大倍率")
+    parser.add_argument("--seed",             type=int,   default=None,
+                        help="亂數種子（不指定則每次隨機，避免重複採樣）")
     parser.add_argument("--n_startup_trials", type=int,   default=10,
                         help="TPE 前幾輪純隨機探索再開始學習（tpe only）")
     parser.add_argument("--population_size",  type=int,   default=50,
@@ -482,5 +493,7 @@ if __name__ == "__main__":
         seed=args.seed,
         n_startup_trials=args.n_startup_trials,
         population_size=args.population_size,
+        pen_t=args.pen_t,
+        pen_a=args.pen_a,
     )
     orchestrator.optimize()

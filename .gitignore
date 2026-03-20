@@ -23,5 +23,6 @@ Llama*
 CLAUDE.md
 gptqmodel_offload/
 tmp/docs/
+cache/
 .cache
 .vscode
