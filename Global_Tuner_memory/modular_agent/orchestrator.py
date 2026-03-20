@@ -28,6 +28,11 @@ def _worker(queue, func, *args, **kwargs):
         queue.put({"status": "success", "result": result})
     except Exception as e:
         queue.put({"status": "error", "error": str(e), "traceback": traceback.format_exc()})
+import signal
+import sys
+import multiprocessing as mp
+
+# ... (keep the _worker function as it is) ...
 
 def run_isolated(func, *args, **kwargs):
     """
@@ -38,7 +43,34 @@ def run_isolated(func, *args, **kwargs):
     queue = ctx.Queue()
     p = ctx.Process(target=_worker, args=(queue, func) + args, kwargs=kwargs)
     p.start()
-    p.join()
+
+    def cleanup_child(signum, frame):
+        logger.warning(f"⚠️ Main process received kill signal ({signum})! Terminating child (PID: {p.pid})...")
+        if p.is_alive():
+            p.terminate()
+            p.join(timeout=2)
+            if p.is_alive():
+                p.kill()  # Force kill if it refuses to terminate
+        sys.exit(1)
+
+    # Temporarily override standard kill signals to protect the child process
+    original_sigterm = signal.signal(signal.SIGTERM, cleanup_child)
+    original_sigint = signal.signal(signal.SIGINT, cleanup_child)
+
+    try:
+        p.join()
+    except Exception as e:
+        logger.warning(f"⚠️ Exception in main process! Terminating child (PID: {p.pid})...")
+        if p.is_alive():
+            p.terminate()
+            p.join(timeout=2)
+            if p.is_alive():
+                p.kill()
+        raise
+    finally:
+        # Restore normal signal behavior once the isolated function finishes
+        signal.signal(signal.SIGTERM, original_sigterm)
+        signal.signal(signal.SIGINT, original_sigint)
 
     if not queue.empty():
         res = queue.get()
@@ -48,6 +80,32 @@ def run_isolated(func, *args, **kwargs):
             raise RuntimeError(f"Isolated process failed: {res['error']}\n{res['traceback']}")
     else:
         raise RuntimeError("Process died unexpectedly (likely killed by OS Out-Of-Memory).")
+# def run_isolated(func, *args, **kwargs):
+#     """
+#     Runs a function in a completely isolated process using the 'spawn' context.
+#     This guarantees that the OS will wipe 100% of the allocated VRAM when the function finishes.
+#     """
+#     ctx = mp.get_context('spawn')
+#     queue = ctx.Queue()
+#     p = ctx.Process(target=_worker, args=(queue, func) + args, kwargs=kwargs)
+#     p.start()
+#     try:
+#         p.join()
+#     except (KeyboardInterrupt, SystemExit):
+#         # If you cancel the main script, kill the isolated process immediately
+#         logger.warning(f"⚠️ Main process interrupted! Terminating isolated child process (PID: {p.pid})...")
+#         p.terminate()
+#         p.join()
+#         raise
+
+#     if not queue.empty():
+#         res = queue.get()
+#         if res["status"] == "success":
+#             return res["result"]
+#         else:
+#             raise RuntimeError(f"Isolated process failed: {res['error']}\n{res['traceback']}")
+#     else:
+#         raise RuntimeError("Process died unexpectedly (likely killed by OS Out-Of-Memory).")
 # ============================================================================
 
 def _make_trial_name(i: int, suggestion) -> str:
@@ -580,13 +638,18 @@ if __name__ == "__main__":
         "acc": args.acc_weight, "lat": args.lat_weight,
         "vram": args.vram_weight, "emit": args.emit_weight,
     }
-    if args.benchmark_runs > 1:
+    if args.benchmark_runs >= 1:
         memory_modes = [ "window", "summary", "tool"] #"full" 先不用，太久
         descriptions = {
             "full": "全部實驗結果", 
             "window": "最近 5 個", 
             "summary": "LLM summary",
             "tool": "Agentic Tool Retrieval"
+        }
+        test_iterations = {
+            "window": 6,
+            "summary": 10,
+            "tool": 5
         }
         results_stats = []
         
@@ -609,13 +672,14 @@ if __name__ == "__main__":
         
         for mode in memory_modes:
             scores = []
+            current_max_iters = test_iterations.get(mode, args.max_iterations)
             for run in range(args.benchmark_runs):
                 logger.info(f"\n>>> Running Benchmark: Mode={mode}, Run={run+1}/{args.benchmark_runs} <<<")
                 
                 # 2. Add Fault Tolerance (try...except)
-                try:
+                try:  #, args.max_iterations
                     orch = OptimizationOrchestrator(
-                        args.model_id, args.task, args.max_iterations, weights,
+                        args.model_id, args.task, max_iterations=current_max_iters, weights=weights,
                         num_samples=args.num_samples,
                         cleanup=args.cleanup, keep_best=args.keep_best,
                         memory_type=mode,
