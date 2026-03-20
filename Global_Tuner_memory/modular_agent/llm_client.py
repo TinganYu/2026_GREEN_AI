@@ -11,7 +11,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 
 class LLMDecisionMaker:
-    def __init__(self, model_id: str, task: str, max_iterations: int, memory_type: str = "full", pen_t: float = 0.15, pen_a: float = 10.0):
+    def __init__(self, model_id: str, task: str, max_iterations: int, memory_type: str = "full", pen_t: float = 0.15, pen_a: float = 10.0, baseline_metrics: dict = None):
         self.model_id = model_id
         self.task = task
         self.max_iterations = max_iterations
@@ -25,6 +25,7 @@ class LLMDecisionMaker:
 
         self.pen_t = pen_t
         self.pen_a = pen_a
+        self.baseline_metrics = baseline_metrics
 
     def _format_history(self, history: list) -> str:
         if not history:
@@ -36,11 +37,45 @@ class LLMDecisionMaker:
             metrics = trial.get('metrics', {})
             details = metrics.get('details', {})
 
-            line = f"- [Iter {trial.get('iteration')}]: Score={metrics.get('score', 0):.4f}"
-            line += (f" (Acc: {metrics.get('accuracy', 0):.4f},"
-                     f" Lat: {metrics.get('latency', 0):.4f}s,"
-                     f" VRAM: {metrics.get('vram', 0):.4f}GB,"
-                     f" Emit: {metrics.get('emissions', 0):.6f}kg CO2)")
+            # line = f"- [Iter {trial.get('iteration')}]: Score={metrics.get('score', 0):.4f}"
+            # line += (f" (Acc: {metrics.get('accuracy', 0):.4f},"
+            #          f" Lat: {metrics.get('latency', 0):.4f}s,"
+            #          f" VRAM: {metrics.get('vram', 0):.4f}GB,"
+            #          f" Emit: {metrics.get('emissions', 0):.6f}kg CO2)")
+            score = metrics.get('score', 0)
+            acc = metrics.get('accuracy', 0)
+            lat = metrics.get('latency', 0)
+            vram = metrics.get('vram', 0)
+            emit = metrics.get('emissions', 0)
+
+            acc_str = f"{acc:.4f}"
+            lat_str = f"{lat:.4f}s"
+            vram_str = f"{vram:.4f}GB"
+            emit_str = f"{emit:.6f}kg"
+
+            # Change 5: Provide change percentage at the end of metrics
+            if self.baseline_metrics:
+                b_acc = self.baseline_metrics.get('accuracy', acc)
+                b_lat = self.baseline_metrics.get('latency', lat)
+                b_vram = self.baseline_metrics.get('vram', vram)
+                b_emit = self.baseline_metrics.get('emissions', emit)
+
+                # Accuracy: Calculate BOTH absolute diff (pp) and relative change (%)
+                acc_diff = acc - b_acc if b_acc else 0
+                acc_pct = ((acc - b_acc) / b_acc) * 100 if b_acc else 0
+                
+                # Others: Just relative change (%)
+                lat_pct = ((lat - b_lat) / b_lat) * 100 if b_lat else 0
+                vram_pct = ((vram - b_vram) / b_vram) * 100 if b_vram else 0
+                emit_pct = ((emit - b_emit) / b_emit) * 100 if b_emit else 0
+
+                # Append to strings
+                acc_str += f" ({acc_diff:+.4f} pp, {acc_pct:+.2f}%)"
+                lat_str += f" ({lat_pct:+.2f}%)"
+                vram_str += f" ({vram_pct:+.2f}%)"
+                emit_str += f" ({emit_pct:+.2f}%)"
+
+            line = f"- [Iter {trial.get('iteration')}]: Score={score:.4f} (Acc: {acc_str}, Lat: {lat_str}, VRAM: {vram_str}, Emit: {emit_str})"
 
             if details:
                 task_accs = [f"{k}={v.get('accuracy', 0):.4f}" for k, v in details.items()]
@@ -89,8 +124,8 @@ class LLMDecisionMaker:
     def _update_knowledge_summary(self, trial_history: list):
         """Updates the LLM summary every 5 trials, correcting past assumptions."""
         if len(trial_history) - self.last_summarized_idx >= 5:
-            # recent_batch = trial_history[self.last_summarized_idx : self.last_summarized_idx + 5]
-            batch_str = self._format_history(trial_history)
+            new_batch = trial_history[self.last_summarized_idx : self.last_summarized_idx + 5]
+            batch_str = self._format_history(new_batch)
             
             prompt = f"""You are an AI assistant maintaining an evolving knowledge base for a model compression agent. 
 
@@ -102,10 +137,20 @@ class LLMDecisionMaker:
 
 === INSTRUCTIONS ===
 Your task is to rewrite and update the current knowledge summary based on the new trial results.
-1. FIND CORRELATIONS: Identify how specific parameter movements affect the metrics. (e.g., "When parameter X goes down, accuracy drops sharply").
-2. DEFINE BOUNDARIES: Identify safe and unsafe zones for hyperparameters based on past failures (e.g., "Ratio values below 0.85 cause failure").
-3. STRATEGIC SUGGESTION: Suggest the next logical phase of exploration based on the trade-offs observed (e.g., "We have hit a wall with VRAM reduction using Method A; explore Method B to push VRAM lower").
-4. 🛑 CRITICAL CONSTRAINT 🛑: DO NOT specify exact parameter combinations to run next. Define the "rules of the game" (what works and what fails), and let the execution agent decide the exact numbers.
+🛑 CRITICAL CONSTRAINT: DO NOT specify exact parameter combinations to run next. Define the "rules of the game".
+
+Output the summary in EXACTLY this structure:
+## Correlations
+(parameter → metric relationships)
+
+## Safe Zones
+(known safe parameter ranges)
+
+## Danger Zones
+(configurations that caused failures or heavy penalties)
+
+## Recommended Direction
+(next exploration focus, NO specific numbers)
 
 Output ONLY the newly updated summary text. Do not include conversational filler.
 """
@@ -155,111 +200,86 @@ Output ONLY the newly updated summary text. Do not include conversational filler
         w_vram = w.get("vram", 0.2)
         w_emit = w.get("emit", 0.2)
 
+        # Tracking for tried_modes and untried_modes directly in the original agent
+        tried_modes_counts = {}
+        for trial in trial_history:
+            mode = trial.get('config', {}).get('mode')
+            if mode:
+                tried_modes_counts[mode] = tried_modes_counts.get(mode, 0) + 1
+                
+        all_modes = {"asvd_only", "gptq", "awq", "qqq", "bnb", "sparse_unstructured", "sparse_structured", "hybrid_asvd_bnb"}
+        untried_modes = sorted(list(all_modes - set(tried_modes_counts.keys())))
+        
+        tried_str = ", ".join([f"{k} ({v}x)" for k, v in tried_modes_counts.items()]) if tried_modes_counts else "None"
+        untried_str = ", ".join(untried_modes) if untried_modes else "None (All modes explored)"
+
+
+
         return f"""You are an LLM compression optimization agent. Choose the best compression strategy for:
 Model: {self.model_id} | Task: {self.task} | Iteration: {iteration}/{self.max_iterations}
 
-GOAL: Maximize Final Score, calculated as follows:
-1. Base Score = 1.0 + {w_acc}*ln(Acc/Base_acc) + {w_lat}*ln(Base_lat/Lat) + {w_vram}*ln(Base_vram/VRAM) + {w_emit}*ln(Base_emit/Emit)
-2. Penalty = {self.pen_a} * max(0.0, (Base_acc - {self.pen_t}) - Acc)
+GOAL: Maximize Final Score.
+1. Base Score = 1.0 + {w_acc}*ln(Acc/Base_acc) + {w_lat}*ln(Base_lat/Lat) + {w_vram}*ln(Base_vram/VRAM) + {w_emit}*ln(Base_emit/Emit)  
+(explain:Prioritize positive relative % changes in Lat, VRAM, and Emit, while minimizing negative absolute drops (pp) in Acc.)
+2. PENALTY: A massive penalty (multiplier {self.pen_a}) is applied ONLY if the Accuracy drop exceeds {self.pen_t} (i.e., the "pp" diff is more negative than -{self.pen_t}).
 3. Final Score = Base Score - Penalty
 
-A Final Score > 1.0 means overall improvement over the baseline. Logarithmic scaling dampens extreme outliers.
-⚠️ CRITICAL: If Accuracy drops by more than 0.15 (15% absolute) from the baseline, a massive penalty is applied. You MUST balance aggressive compression with accuracy retention!
-
 === AVAILABLE MODES & OUTPUT FORMATS ===
-[MODE: asvd_only] Low-rank decomposition → reduces Latency.
+Strictly output ONLY valid JSON matching one of these structures. Do not wrap in markdown formatting.
+"reasoning" MUST follow this structure: "1-sentence: Why this mode fills a gap in current coverage. 1-sentence: Expected trade-off."
+
+[MODE: asvd_only]
 {{"reasoning": "...", "mode": "asvd_only", 
-  "alpha": 0.5,               // Must be one of: [0.3, 0.4, 0.5, 0.6, 0.7]
-  "param_ratio_target": 0.90, // Float between 0.70 and 0.99
-  "scaling_method": "fisher"  // One of: ["abs_mean", "abs_max", "fisher"]
+  "alpha": 0.5,               // categorical [0.3, 0.4, 0.5, 0.6, 0.7] Higher = preserves activation distribution more
+  "param_ratio_target": 0.90, // linear [0.70 - 0.99] Lower = heavier compression
+  "scaling_method": "fisher"  // categorical ["abs_mean", "abs_max", "fisher"] fisher typically best
 }}
 
-[MODE: gptq] Hessian-based weight quantization → reduces VRAM.
+[MODE: gptq]
 {{"reasoning": "...", "mode": "gptq",
-  "quant_bits": 4,         // One of: [3, 4, 8]
-  "quant_group_size": 128, // One of: [16, 32, 64, 128, 256]
-  "quant_format": "gptq",  // One of: ["gptq", "gptq_v2"]
-  "damp_percent": 0.05     // Float between 0.001 and 0.1 (log scale)
+  "quant_bits": 4,         // categorical [3, 4, 8] 4-bit is sweet spot
+  "quant_group_size": 128, // categorical [16, 32, 64, 128, 256] Smaller = higher precision, larger size
+  "quant_format": "gptq",  // categorical ["gptq", "gptq_v2"] v2 fixes overflow
+  "damp_percent": 0.05     // log [0.001 - 0.1] Try 0.01~0.05
 }}
 
-[MODE: awq] Activation-aware quantization → reduces VRAM.
+[MODE: awq]
 {{"reasoning": "...", "mode": "awq",
-  "quant_group_size": 128  // One of: [16, 32, 64, 128]
+  "quant_group_size": 128  // categorical [16, 32, 64, 128] Fixed at 4-bit
 }}
 
-[MODE: qqq] W4A8 quantization.
+[MODE: qqq]
 {{"reasoning": "...", "mode": "qqq",
-  "quant_group_size": 128, // One of: [-1, 128]
-  "damp_percent": 0.005    // Float between 0.0005 and 0.05 (log scale)
+  "quant_group_size": 128, // categorical [-1, 128] -1 is full matrix
+  "damp_percent": 0.005    // log [0.0005 - 0.05] Hessian dampening
 }}
 
-[MODE: bnb] On-the-fly quantization.
+[MODE: bnb]
 {{"reasoning": "...", "mode": "bnb",
-  "quant_bits": 4,         // One of: [4, 8]
-  "use_double_quant": false // True only if quant_bits is 4
+  "quant_bits": 4,         // categorical [4, 8] 4 saves VRAM aggressively
+  "use_double_quant": false // categorical [true, false] True saves ~0.4 bit/param (if bits=4)
 }}
 
-[MODE: sparse_unstructured] SparseGPT weight pruning.
+[MODE: sparse_unstructured]
 {{"reasoning": "...", "mode": "sparse_unstructured",
-  "sparsity_ratio": 0.5    // Float between 0.3 and 0.7
+  "sparsity_ratio": 0.5    // linear [0.3 - 0.7] e.g., 0.5 = 50% weights pruned
 }}
 
-[MODE: sparse_structured] Structured sparsity (N:M pattern).
+[MODE: sparse_structured]
 {{"reasoning": "...", "mode": "sparse_structured",
-  "sparsity_structure": "2:4" // One of: ["2:4", "4:8"]
+  "sparsity_structure": "2:4" // categorical ["2:4", "4:8"] Hardware-acceleration friendly
 }}
 
-[MODE: hybrid_asvd_bnb] Combine ASVD + BNB.
+[MODE: hybrid_asvd_bnb]
 {{"reasoning": "...", "mode": "hybrid_asvd_bnb",
   "alpha": 0.5, "param_ratio_target": 0.92, "scaling_method": "fisher",
   "quant_bits": 4, "use_double_quant": false
 }}
 
-=== Search Space ===
-Strictly adhere to the parameter ranges and types below. For "log scale" parameters, ensure you explore the smaller magnitude values densely rather than just jumping to the maximum.
-
-### ASVD (Low-Rank Decomposition)
-| Parameter | Type | Range / Options | Description |
-|---|---|---|---|
-| `alpha` | Categorical | `0.3, 0.4, 0.5, 0.6, 0.7` | Activation-aware scaling strength. Higher values preserve the activation distribution more. |
-| `param_ratio_target` | Float (Linear) | 0.70 ~ 0.99 | Target ratio of parameters to keep. Lower values equal heavier compression. |
-| `scaling_method` | Categorical | `abs_mean`, `abs_max`, `fisher` | Singular value scaling method. `fisher` typically yields the best results. |
-
-### GPTQ
-| Parameter | Type | Range / Options | Description |
-|---|---|---|---|
-| `quant_bits` | Categorical | `3, 4, 8` | Quantization bits. 4-bit is the mainstream sweet spot for retaining accuracy. |
-| `quant_group_size` | Categorical | `16, 32, 64, 128, 256` | Group size. -1 means full matrix. Smaller sizes yield higher precision but larger files. |
-| `quant_format` | Categorical | `gptq`, `gptq_v2` | `gptq_v2` fixes overflow issues present in v1 and is generally preferred. |
-| `damp_percent` | Float (Log) | 0.001 ~ 0.1 | Hessian dampening factor. Recommended exploration range is 0.01~0.05. |
-
-### AWQ
-| Parameter | Type | Range / Options | Description |
-|---|---|---|---|
-| `quant_group_size` | Categorical | `16, 32, 64, 128` | Same logic as GPTQ. (AWQ is fixed at 4-bit). |
-
-### QQQ
-| Parameter | Type | Range / Options | Description |
-|---|---|---|---|
-| `quant_group_size` | Categorical | `-1, 128` | -1 is full matrix (high precision, slower), 128 is standard. (QQQ is fixed at 4-bit). |
-| `damp_percent` | Float (Log) | 0.0005 ~ 0.05 | Hessian dampening factor, similar to GPTQ. |
-
-### BNB (BitsAndBytes)
-| Parameter | Type | Range / Options | Description |
-|---|---|---|---|
-| `quant_bits` | Categorical | `4, 8` | 4-bit aggressively saves VRAM; 8-bit yields higher precision. |
-| `use_double_quant` | Categorical | `False`, `True` | Re-quantizes the quantization constants to save an additional ~0.4 bit/param (only valid if bits=4). |
-
-### SparseGPT
-| Parameter | Type | Range / Options | Description |
-|---|---|---|---|
-| `sparsity_ratio` | Float (Linear) | 0.3 ~ 0.7 | Used for unstructured mode. Ratio of weights to prune (e.g., 0.5 = 50% weights zeroed out). |
-| `sparsity_structure`| Categorical | `2:4`, `4:8` | Used for structured mode. e.g., 2:4 means keeping 2 out of every 4 weights. Hardware-acceleration friendly. |
-
-### Hybrid（ASVD + BNB）
-ASVD same as above + BNB same as above. The two methods are applied sequentially (ASVD first, then BNB), so the search space is effectively the Cartesian product of the two individual spaces.
-
 === CURRENT STATUS ===
+Modes tried so far: {tried_str}
+Modes NOT yet tried: {untried_str}
+
 Trial Context ({self.memory_type} mode):
 {history_str}
 
@@ -313,7 +333,7 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
                 )
                 
                 # FIXED: Strip comments to prevent json.loads from crashing
-                raw_content = self._strip_json_comments(response.choices[0].message.content)
+                raw_content = self._strip_json_comments(response.choices[0].message.content or "{}") # 防呆：如果 content 是 None，給一個空 JSON 讓它至少能通過 json.loads 而不是崩潰
                 
                 # Attempt to validate the JSON against our strict Literal rules
                 suggestion = StrategySuggestion.model_validate_json(raw_content)
@@ -363,7 +383,7 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
             "type": "function",
             "function": {
                 "name": "retrieve_trials",
-                "description": "Fetch past trial results by method to see what parameters succeeded or failed. (Pareto best configs are already in your prompt).",
+                "description": "Fetch full history for a specific method when Pareto frontier data is insufficient (e.g., you want to see failed configs to avoid them, or need parameter variation details). Skip if Pareto already shows enough variation for the method you plan to use.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -380,7 +400,13 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
         
         for turn in range(MAX_TURNS):
             force_answer = (turn == MAX_TURNS - 1)
-            
+
+            if force_answer and turn > 0:
+                messages.append({
+                    "role": "user",
+                    "content": "You have run out of query chances. Based on all information gathered, output ONLY the final JSON strategy. No tool calls, no prose."
+                })
+
             response = self.client.chat.completions.create(
                 model=self.llm_model,
                 messages=messages,
@@ -429,7 +455,7 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
                 
             # If no tool calls, it means the model outputted the final JSON
             else:
-                raw_content = self._strip_json_comments(msg.content)
+                raw_content = self._strip_json_comments(msg.content or "{}") # 防呆：如果 content 是 None，給一個空 JSON 讓它至少能通過 json.loads 而不是崩潰
                 
                 # ---  Mini-retry loop to preserve tool context ---
                 for attempt in range(2): 

@@ -283,6 +283,7 @@ class OptimizationOrchestrator:
     def optimize(self):
         self.baseline_metrics = self._load_or_run_baseline()
         logger.info(f"基線建立完成: {self.baseline_metrics}")
+        self.llm.baseline_metrics = self.baseline_metrics
 
         # 儲存實驗設定
         self._save_experiment_config()
