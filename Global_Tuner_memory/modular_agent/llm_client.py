@@ -11,7 +11,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 
 class LLMDecisionMaker:
-    def __init__(self, model_id: str, task: str, max_iterations: int, memory_type: str = "full"):
+    def __init__(self, model_id: str, task: str, max_iterations: int, memory_type: str = "full", pen_t: float = 0.15, pen_a: float = 10.0):
         self.model_id = model_id
         self.task = task
         self.max_iterations = max_iterations
@@ -22,6 +22,9 @@ class LLMDecisionMaker:
         self.memory_type = memory_type  # 'full', 'window', or 'summary'
         self.knowledge_summary = "No previous summary available."
         self.last_summarized_idx = 0
+
+        self.pen_t = pen_t
+        self.pen_a = pen_a
 
     def _format_history(self, history: list) -> str:
         if not history:
@@ -155,8 +158,13 @@ Output ONLY the newly updated summary text. Do not include conversational filler
         return f"""You are an LLM compression optimization agent. Choose the best compression strategy for:
 Model: {self.model_id} | Task: {self.task} | Iteration: {iteration}/{self.max_iterations}
 
-GOAL: Maximize score = 1.0 + {w_acc}*ln(Acc/Base_acc) + {w_lat}*ln(Base_lat/Lat) + {w_vram}*ln(Base_vram/VRAM) + {w_emit}*ln(Base_emit/Emit)
-Score > 1.0 means improvement over uncompressed baseline. Logarithmic scaling dampens extreme outliers.
+GOAL: Maximize Final Score, calculated as follows:
+1. Base Score = 1.0 + {w_acc}*ln(Acc/Base_acc) + {w_lat}*ln(Base_lat/Lat) + {w_vram}*ln(Base_vram/VRAM) + {w_emit}*ln(Base_emit/Emit)
+2. Penalty = {self.pen_a} * max(0.0, (Base_acc - {self.pen_t}) - Acc)
+3. Final Score = Base Score - Penalty
+
+A Final Score > 1.0 means overall improvement over the baseline. Logarithmic scaling dampens extreme outliers.
+⚠️ CRITICAL: If Accuracy drops by more than 0.15 (15% absolute) from the baseline, a massive penalty is applied. You MUST balance aggressive compression with accuracy retention!
 
 === AVAILABLE MODES & OUTPUT FORMATS ===
 [MODE: asvd_only] Low-rank decomposition → reduces Latency.
@@ -168,7 +176,7 @@ Score > 1.0 means improvement over uncompressed baseline. Logarithmic scaling da
 
 [MODE: gptq] Hessian-based weight quantization → reduces VRAM.
 {{"reasoning": "...", "mode": "gptq",
-  "quant_bits": 4,         // One of: [2, 3, 4, 8]
+  "quant_bits": 4,         // One of: [3, 4, 8]
   "quant_group_size": 128, // One of: [16, 32, 64, 128, 256]
   "quant_format": "gptq",  // One of: ["gptq", "gptq_v2"]
   "damp_percent": 0.05     // Float between 0.001 and 0.1 (log scale)
@@ -220,7 +228,7 @@ Strictly adhere to the parameter ranges and types below. For "log scale" paramet
 ### GPTQ
 | Parameter | Type | Range / Options | Description |
 |---|---|---|---|
-| `quant_bits` | Categorical | `2, 3, 4, 8` | Quantization bits. 4-bit is the mainstream sweet spot for retaining accuracy. |
+| `quant_bits` | Categorical | `3, 4, 8` | Quantization bits. 4-bit is the mainstream sweet spot for retaining accuracy. |
 | `quant_group_size` | Categorical | `16, 32, 64, 128, 256` | Group size. -1 means full matrix. Smaller sizes yield higher precision but larger files. |
 | `quant_format` | Categorical | `gptq`, `gptq_v2` | `gptq_v2` fixes overflow issues present in v1 and is generally preferred. |
 | `damp_percent` | Float (Log) | 0.001 ~ 0.1 | Hessian dampening factor. Recommended exploration range is 0.01~0.05. |

@@ -96,7 +96,7 @@ def _make_trial_name(i: int, suggestion) -> str:
 class OptimizationOrchestrator:
     def __init__(self, model_id: str, task: str, max_iterations: int = 10,
                  weights: dict = None, num_samples: int = None,
-                 cleanup: bool = True, keep_best: bool = True, memory_type: str = "full", base_dir: Path = None):
+                 cleanup: bool = True, keep_best: bool = True, memory_type: str = "full", base_dir: Path = None, pen_t: float = 0.15, pen_a: float = 10.0):
         self.model_id = model_id
         self.task = task
         self.max_iterations = max_iterations
@@ -107,10 +107,12 @@ class OptimizationOrchestrator:
         self.memory_type = memory_type
         self.trial_history = []
         self._seen_configs: set = set()
-        self.llm = LLMDecisionMaker(model_id, task, max_iterations, memory_type=self.memory_type)
+        self.llm = LLMDecisionMaker(model_id, task, max_iterations, memory_type=self.memory_type, pen_t=pen_t, pen_a=pen_a)
         self.best_score = -float('inf')
         self.best_result = None
-        self.weights = weights or {"acc": 0.5, "lat": 0.1, "vram": 0.2, "emit": 0.2}
+        self.weights = weights or {"acc": 3.0, "lat": 1.0, "vram": 1.0, "emit": 1.0}
+        self.pen_t = pen_t
+        self.pen_a = pen_a
         self.baseline_metrics = None
 
         # 實驗目錄：tuning_results/exp_{model}_{task}_{timestamp}/
@@ -255,6 +257,8 @@ class OptimizationOrchestrator:
                 baseline_metrics=None,
                 num_samples=self.num_samples,
                 output_dir=str(self._baseline_cache_dir),
+                pen_t=self.pen_t,
+                pen_a=self.pen_a
             )
             reused_details.update(eval_results.get("details", {}))
         else:
@@ -418,6 +422,8 @@ class OptimizationOrchestrator:
                 baseline_metrics=self.baseline_metrics,
                 num_samples=self.num_samples,
                 output_dir=str(self.exp_dir),
+                pen_t=self.pen_t,
+                pen_a=self.pen_a
             )
 
             trial_data = {
@@ -549,10 +555,14 @@ if __name__ == "__main__":
     parser.add_argument("--max_iterations", type=int, default=10)
     parser.add_argument("--num_samples", type=int, default=None,
                         help="每個 dataset 的評估樣本數（None = 全部）")
-    parser.add_argument("--acc_weight", type=float, default=0.6)
-    parser.add_argument("--lat_weight", type=float, default=0.05)
-    parser.add_argument("--vram_weight", type=float, default=0.05)
-    parser.add_argument("--emit_weight", type=float, default=0.3)
+    parser.add_argument("--acc_weight",  type=float, default=3.0)
+    parser.add_argument("--lat_weight",  type=float, default=1.0)
+    parser.add_argument("--vram_weight", type=float, default=1.0)
+    parser.add_argument("--emit_weight", type=float, default=1.0)
+    parser.add_argument("--pen_t",       type=float, default=0.15,
+                        help="Accuracy penalty 容忍量（絕對值，掉幅超過此值才扣分）")
+    parser.add_argument("--pen_a",       type=float, default=10.0,
+                        help="Accuracy penalty 放大倍率")
     parser.add_argument("--no-cleanup", dest="cleanup", action="store_false",
                         help="跑完後不刪除 trial 模型（預設：刪除）")
     parser.add_argument("--no-keep-best", dest="keep_best", action="store_false",
@@ -608,7 +618,9 @@ if __name__ == "__main__":
                         num_samples=args.num_samples,
                         cleanup=args.cleanup, keep_best=args.keep_best,
                         memory_type=mode,
-                        base_dir=master_bench_dir
+                        base_dir=master_bench_dir,
+                        pen_t=args.pen_t,
+                        pen_a=args.pen_a
                     )
                     orch.optimize()
                     
@@ -656,6 +668,8 @@ if __name__ == "__main__":
             args.model_id, args.task, args.max_iterations, weights,
             num_samples=args.num_samples,
             cleanup=args.cleanup, keep_best=args.keep_best,
-            memory_type=args.memory_type
+            memory_type=args.memory_type,
+            pen_t=args.pen_t,
+            pen_a=args.pen_a
         )
         orchestrator.optimize()

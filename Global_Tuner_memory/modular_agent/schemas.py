@@ -114,7 +114,7 @@ class StrategySuggestion(BaseModel):
     sparsity_structure: str = Field(default="2:4", description="結構化稀疏: [2:4, 4:8]")
 
     # ── 量化參數 (由 mode 直接決定方法) ──────────────────────────────────────────
-    quant_bits: int = Field(default=4, description="GPTQ:[2,3,4,8] | BNB:[4,8] | AWQ/QQQ:固定4")
+    quant_bits: int = Field(default=4, description="GPTQ:[3,4,8] | BNB:[4,8] | AWQ/QQQ:固定4")
     quant_group_size: int = Field(default=128, description="GPTQ:[16,32,64,128,256] | AWQ:[16,32,64,128] | QQQ:[-1,128]")
     quant_format: str = Field(default="gptq", description="GPTQ:[gptq,gptq_v2]")
     
@@ -137,8 +137,8 @@ class StrategySuggestion(BaseModel):
 
         # 2. GPTQ constraints
         elif self.mode == "gptq":
-            if self.quant_bits not in [2, 3, 4, 8]:
-                raise ValueError(f"GPTQ requires quant_bits in [2, 3, 4, 8], got {self.quant_bits}")
+            if self.quant_bits not in [3, 4, 8]:
+                raise ValueError(f"GPTQ requires quant_bits in [3, 4, 8], got {self.quant_bits}")
             if self.quant_group_size not in [16, 32, 64, 128, 256]:
                 raise ValueError(f"GPTQ invalid quant_group_size: {self.quant_group_size}")
             if not (0.001 <= self.damp_percent <= 0.1):
