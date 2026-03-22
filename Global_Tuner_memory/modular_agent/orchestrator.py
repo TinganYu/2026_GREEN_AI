@@ -502,6 +502,9 @@ class OptimizationOrchestrator:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+            if self.cleanup:
+                self._eager_cleanup_trials(trial_dirs)
+
 
         # 最終報告
         self._print_summary()
@@ -526,6 +529,24 @@ class OptimizationOrchestrator:
             except Exception as e:
                 logger.warning(f"刪除失敗 {d}: {e}")
         logger.info(f"清理完成：刪除 {deleted} 個 trial，保留 {kept} 個")
+
+    def _eager_cleanup_trials(self, trial_dirs: list):
+        """Deletes trial directories immediately during the run to save disk space, keeping only the best."""
+        best_dir = str(self.best_result["trial_dir"]) if self.best_result else None
+        
+        for d in trial_dirs:
+            # Skip the best directory if we are configured to keep it
+            if self.keep_best and d == best_dir:
+                continue
+                
+            # If the directory still exists, delete it
+            dir_path = Path(d)
+            if dir_path.exists():
+                try:
+                    shutil.rmtree(d, ignore_errors=True)
+                    logger.info(f"🗑️ Eagerly deleted trial model to save space: {dir_path.name}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to delete {d}: {e}")
 
     def _print_summary(self):
         logger.info("\n" + "=" * 50)
@@ -638,7 +659,7 @@ if __name__ == "__main__":
         "acc": args.acc_weight, "lat": args.lat_weight,
         "vram": args.vram_weight, "emit": args.emit_weight,
     }
-    if args.benchmark_runs >= 1:
+    if args.benchmark_runs > 1:
         memory_modes = [ "window", "summary", "tool"] #"full" 先不用，太久
         descriptions = {
             "full": "全部實驗結果", 

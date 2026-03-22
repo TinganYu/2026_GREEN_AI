@@ -440,6 +440,28 @@ def run_quantization(model_path: str, suggestion, output_dir: Optional[str] = No
     )
     return _run_quantization(model_path, config, output_dir=output_dir)
 
+def _sanitize_sparse_config(model_path: str):
+    """Removes buggy compressed-tensors config left by sparse methods."""
+    import json
+    from pathlib import Path
+    
+    config_path = Path(model_path) / "config.json"
+    if not config_path.exists():
+        return
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config_data = json.load(f)
+        
+        q_config = config_data.get("quantization_config", {})
+        if q_config.get("quant_method") == "compressed-tensors":
+            if "config_groups" not in q_config:
+                logger.info("🔧 Fixing config.json: Removing buggy quantization_config to prevent transformers crash.")
+                del config_data["quantization_config"]
+                with open(config_path, "w", encoding="utf-8") as f:
+                    json.dump(config_data, f, indent=2)
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to clean config.json: {e}")
 
 # ============================================================================
 # 評估函數（直接呼叫 Evals/ 評估器）
@@ -470,6 +492,7 @@ def _detect_quantization_type(model_path: str) -> Optional[str]:
                 return "bnb"
         except Exception:
             pass
+    _sanitize_sparse_config(model_path)
     # 從路徑名稱推斷
     path_lower = model_path.lower()
     for method in ("gptq", "awq", "qqq", "bnb"):

@@ -100,13 +100,13 @@ class LLMDecisionMaker:
 
             # Match logic based on the query
             is_match = False
-            if query == "asvd" and mode in ["asvd_only", "hybrid_asvd_bnb"]:
+            if "asvd" in query and mode in ["asvd_only", "hybrid_asvd_bnb"]:
                 is_match = True
             elif query in ["gptq", "awq", "qqq", "bnb"] and mode == query:
                 is_match = True
-            elif query == "sparse" and mode in ["sparse_unstructured", "sparse_structured"]:
+            elif "sparse" in query and mode in ["sparse_unstructured", "sparse_structured"]:
                 is_match = True
-            elif query == "hybrid" and mode == "hybrid_asvd_bnb":
+            elif "hybrid" in query and mode == "hybrid_asvd_bnb":
                 is_match = True
 
             if is_match:
@@ -226,8 +226,7 @@ GOAL: Maximize Final Score.
 
 === AVAILABLE MODES & OUTPUT FORMATS ===
 Strictly output ONLY valid JSON matching one of these structures. Do not wrap in markdown formatting.
-"reasoning" MUST follow this structure: "1-sentence: Why this mode fills a gap in current coverage. 1-sentence: Expected trade-off."
-
+"reasoning" MUST follow this structure: "A detailed explanation of why this mode fills a gap in current coverage, followed by a comprehensive analysis of the expected trade-offs and potential risks."
 [MODE: asvd_only]
 {{"reasoning": "...", "mode": "asvd_only", 
   "alpha": 0.5,               // categorical [0.3, 0.4, 0.5, 0.6, 0.7] Higher = preserves activation distribution more
@@ -374,8 +373,10 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
         system_prompt += (
             "\n\n=== TOOL USAGE RULES ===\n"
             "1. You have a 'retrieve_trials' tool to search past experiments by method.\n"
-            f"2. You have a STRICT LIMIT of {MAX_TURNS - 1} search queries per iteration. Plan your queries carefully!\n"
-            "3. Once you have enough information, or if you run out of turns, you MUST output ONLY the final StrategySuggestion JSON."
+            "2. STRICT RULE: DO NOT use the tool for any method listed in 'Modes NOT yet tried'. The database will be empty.\n"
+            f"3. You have a STRICT LIMIT of {MAX_TURNS - 1} search queries per iteration. Plan your queries carefully!\n"
+            "4. Once you have enough information, or if you run out of turns, you MUST output ONLY the final StrategySuggestion JSON.\n"
+            "5. Do not make more than 2 parallel search queries at the exact same time."
         )
         messages = [{"role": "system", "content": system_prompt}]
         
@@ -383,7 +384,7 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
             "type": "function",
             "function": {
                 "name": "retrieve_trials",
-                "description": "Fetch full history for a specific method when Pareto frontier data is insufficient (e.g., you want to see failed configs to avoid them, or need parameter variation details). Skip if Pareto already shows enough variation for the method you plan to use.",
+                "description": "Fetch full history for a specific method. STRICT LIMITATION: Do NOT query methods you haven't tried yet (check the 'Modes NOT yet tried' list). Only use this to investigate variations or failures of methods you HAVE already tried.",
                 "parameters": {
                     "type": "object",
                     "properties": {
