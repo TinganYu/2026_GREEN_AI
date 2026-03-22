@@ -453,7 +453,7 @@ def _sanitize_sparse_config(model_path: str):
         with open(config_path, "r", encoding="utf-8") as f:
             config_data = json.load(f)
         
-        q_config = config_data.get("quantization_config", {})
+        q_config = config_data.get("quantization_config") or {}
         if q_config.get("quant_method") == "compressed-tensors":
             if "config_groups" not in q_config:
                 logger.info("🔧 Fixing config.json: Removing buggy quantization_config to prevent transformers crash.")
@@ -481,7 +481,7 @@ def _detect_quantization_type(model_path: str) -> Optional[str]:
         try:
             with open(config_path, "r") as f:
                 cfg = json.load(f)
-            q = cfg.get("quantization_config", {})
+            q = cfg.get("quantization_config") or {}
             # GPTQ / AWQ / QQQ
             quant_type = q.get("quant_type", "").lower()
             if quant_type in ("gptq", "awq", "qqq"):

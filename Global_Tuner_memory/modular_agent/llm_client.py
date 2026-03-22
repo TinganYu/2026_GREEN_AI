@@ -33,9 +33,15 @@ class LLMDecisionMaker:
 
         lines = []
         for trial in history:
-            config = trial.get('config', {})
-            metrics = trial.get('metrics', {})
-            details = metrics.get('details', {})
+            config = trial.get('config') or {}
+
+            error_msg = trial.get('error')
+            if error_msg:
+                lines.append(f"- [Iter {trial.get('iteration')}]: SKIPPED / FAILED ({error_msg}) | Config attempted: {json.dumps(config)}")
+                continue
+            
+            metrics = trial.get('metrics') or {}
+            details = metrics.get('details') or {}
 
             # line = f"- [Iter {trial.get('iteration')}]: Score={metrics.get('score', 0):.4f}"
             # line += (f" (Acc: {metrics.get('accuracy', 0):.4f},"
@@ -92,7 +98,7 @@ class LLMDecisionMaker:
 
         filtered = []
         for trial in trial_history:
-            cfg = trial.get("config", {})
+            cfg = trial.get("config") or {}
             if not cfg:
                 continue
                 
@@ -176,8 +182,15 @@ Output ONLY the newly updated summary text. Do not include conversational filler
                 logger.error(f"Failed to update knowledge summary: {e}")
 
     def _create_prompt(self, iteration: int, trial_history: list, pareto: list = None,
-                       weights: dict = None) -> str:
+                       weights: dict = None, rejected_configs: list = None) -> str:
         
+        rejected_str = ""
+        if rejected_configs:
+            rejected_str = "\n=== ⚠️ STRICT CONSTRAINT: REJECTED CONFIGS ===\n"
+            rejected_str += "You MUST NOT suggest any of the following configurations. You just tried them and they are duplicates:\n"
+            for r in rejected_configs:
+                rejected_str += f"- {json.dumps(r)}\n"
+
         # Handle the different memory modes
         if self.memory_type == "window":
             history_str = self._format_history(trial_history[-5:])
@@ -203,7 +216,8 @@ Output ONLY the newly updated summary text. Do not include conversational filler
         # Tracking for tried_modes and untried_modes directly in the original agent
         tried_modes_counts = {}
         for trial in trial_history:
-            mode = trial.get('config', {}).get('mode')
+            config = trial.get('config') or {}
+            mode = config.get('mode')
             if mode:
                 tried_modes_counts[mode] = tried_modes_counts.get(mode, 0) + 1
                 
@@ -278,6 +292,7 @@ Strictly output ONLY valid JSON matching one of these structures. Do not wrap in
 === CURRENT STATUS ===
 Modes tried so far: {tried_str}
 Modes NOT yet tried: {untried_str}
+{rejected_str}
 
 Trial Context ({self.memory_type} mode):
 {history_str}
@@ -303,14 +318,14 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
         return re.sub(r'(?<!:)//[^\n"]*', '', text)
 
     def get_suggestion(self, iteration: int, trial_history: list, pareto: list = None,
-                       weights: dict = None):
+                       weights: dict = None, rejected_configs: list = None):
         """
         Returns (suggestion: StrategySuggestion, raw_llm_output: dict)
         raw_llm_output is the raw LLM output (without pydantic defaults), used for logging.
         Routes the request based on memory type.
         """
         if self.memory_type == "tool":
-            return self._get_suggestion_with_tools(iteration, trial_history, pareto, weights)
+            return self._get_suggestion_with_tools(iteration, trial_history, pareto, weights, rejected_configs)
 
         import json
         from pydantic import ValidationError
@@ -320,7 +335,7 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
         max_retries = 3
         
         # FIXED: Added weights parameter back in
-        prompt = self._create_prompt(iteration, trial_history, pareto=pareto, weights=weights)
+        prompt = self._create_prompt(iteration, trial_history, pareto=pareto, weights=weights, rejected_configs=rejected_configs)
         messages = [{"role": "user", "content": prompt}]
         
         for attempt in range(max_retries):
@@ -354,7 +369,7 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
                     "content": f"Your JSON failed Pydantic validation. Please fix the following errors and strictly follow the schema:\n{e}"
                 })
 
-    def _get_suggestion_with_tools(self, iteration: int, trial_history: list, pareto: list = None, weights: dict = None):
+    def _get_suggestion_with_tools(self, iteration: int, trial_history: list, pareto: list = None, weights: dict = None, rejected_configs: list = None):
         """Bounded multi-round tool-calling loop."""
         import json
         from pydantic import ValidationError
@@ -368,7 +383,8 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
             iteration, 
             trial_history, # Only show the absolute most recent 3 trials by default
             pareto=pareto, 
-            weights=weights
+            weights=weights,
+            rejected_configs=rejected_configs
         )
         system_prompt += (
             "\n\n=== TOOL USAGE RULES ===\n"

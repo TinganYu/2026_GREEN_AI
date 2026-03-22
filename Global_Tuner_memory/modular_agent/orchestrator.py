@@ -366,18 +366,21 @@ class OptimizationOrchestrator:
             pareto = get_pareto_frontier(self.trial_history)
             _MAX_DUP_RETRIES = 3
             suggestion, llm_output = None, None
+
+            rejected_this_iter = []
             for _retry in range(_MAX_DUP_RETRIES):
-                _s, _raw = self.llm.get_suggestion(i, self.trial_history, pareto=pareto, weights=self.weights)
+                _s, _raw = self.llm.get_suggestion(i, self.trial_history, pareto=pareto, weights=self.weights, rejected_configs=rejected_this_iter)
                 _fp = self._config_fingerprint(_s)
                 if _fp not in self._seen_configs:
                     suggestion, llm_output = _s, _raw
                     self._seen_configs.add(_fp)
                     break
-                logger.warning(f"[去重] LLM 建議重複 config (retry {_retry+1}/{_MAX_DUP_RETRIES})")
+                logger.warning(f"[去重複] LLM 建議重複 config (retry {_retry+1}/{_MAX_DUP_RETRIES})")
+                rejected_this_iter.append(_s.to_log_dict())
             else:
                 logger.warning(f"Iteration {i}: LLM 無法產生新 config，跳過")
                 self.trial_history.append({
-                    "iteration": i, "config": None,
+                    "iteration": i, "config": {},
                     "suggestion": None,
                     "metrics": {"score": 0.0}, "model_path": None,
                     "error": "重複 config，已跳過",
