@@ -364,7 +364,7 @@ class OptimizationOrchestrator:
 
             # Step 1: LLM 決策（含去重重試）
             pareto = get_pareto_frontier(self.trial_history)
-            _MAX_DUP_RETRIES = 3
+            _MAX_DUP_RETRIES = 5
             suggestion, llm_output = None, None
 
             rejected_this_iter = []
