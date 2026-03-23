@@ -325,6 +325,15 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
         Routes the request based on memory type.
         """
         if self.memory_type == "tool":
+            # Tool mode 的附加價值是「補充主 prompt 看不到的歷史」
+            # 主 prompt 只顯示最近 3 筆，所以 history <= 3 時工具查回來的是重複資料
+            if len(trial_history) <= 3:
+                original = self.memory_type
+                self.memory_type = "window"
+                try:
+                    return self.get_suggestion(iteration, trial_history, pareto, weights, rejected_configs)
+                finally:
+                    self.memory_type = original
             return self._get_suggestion_with_tools(iteration, trial_history, pareto, weights, rejected_configs)
 
         import json
@@ -405,16 +414,20 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
                     "type": "object",
                     "properties": {
                         "query": {
-                            "type": "string", 
+                            "type": "string",
                             "enum": ["asvd", "gptq", "awq", "qqq", "bnb", "sparse", "hybrid"],
                             "description": "The specific compression method to search for."
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Why are you querying this method? What hypothesis are you testing or what gap are you trying to fill?"
                         }
                     },
-                    "required": ["query"]
+                    "required": ["query", "reason"]
                 }
             }
         }]
-        
+
         for turn in range(MAX_TURNS):
             force_answer = (turn == MAX_TURNS - 1)
 
@@ -440,21 +453,23 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
                     args = json.loads(tool_call.function.arguments)
                     query = args.get("query")
                     
+                    reason = args.get("reason", "")
                     if not query:
                         # 防呆機制：如果 LLM 漏給參數，強制它重新思考
                         retrieval_results = "System Error: Missing required parameter 'query'. Please specify a method like 'gptq' or 'asvd'."
                         logger.warning("Agent called tool without a query.")
                     else:
-                        logger.info(f"🔍 Agent requested retrieval for: {query}")
+                        logger.info(f"🔍 Agent requested retrieval for: {query} | Reason: {reason}")
                         retrieval_results = self._execute_retrieve_trials(query, trial_history)
                         debug_log = {
                             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "iteration": iteration,
                             "turn": turn + 1,
                             "query": query,
+                            "reason": reason,
                             "results": retrieval_results
                         }
-                        
+
                         # Use the specific experiment directory instead of the root!
                         if hasattr(self, 'exp_dir'):
                             log_path = self.exp_dir / "tool_debug_log.jsonl"
@@ -462,11 +477,13 @@ Output ONLY the JSON for your chosen mode. No extra fields, no prose.
                                 f.write(json.dumps(debug_log, ensure_ascii=False) + "\n")
                         else:
                             logger.warning("No exp_dir set for LLMDecisionMaker; skipping tool log.")
-                    
+
+                    # reason 注入回 tool result，讓下一輪 LLM 記得自己在驗證什麼假設
+                    reason_prefix = f"[Your query goal: {reason}]\n" if reason else ""
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
-                        "content": retrieval_results
+                        "content": reason_prefix + retrieval_results
                     })
                 continue # Go to the next turn to let the LLM analyze the results
                 

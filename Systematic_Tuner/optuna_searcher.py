@@ -58,6 +58,7 @@ class OptunaSearcher:
         population_size: int = 50,
     ):
         self.modes = modes or ALL_MODES
+        self.sampler = sampler
 
         if sampler == "tpe":
             _sampler = optuna.samplers.TPESampler(

@@ -117,7 +117,7 @@ def _detect_quantization_type(model_path: str) -> Optional[str]:
         try:
             with open(config_path, "r") as f:
                 cfg = json.load(f)
-            q = cfg.get("quantization_config", {})
+            q = cfg.get("quantization_config") or {}
             # GPTQ / AWQ / QQQ
             quant_type = q.get("quant_type", "").lower()
             if quant_type in ("gptq", "awq", "qqq"):
@@ -126,6 +126,11 @@ def _detect_quantization_type(model_path: str) -> Optional[str]:
             if (q.get("quant_method", "").lower() == "bitsandbytes"
                     or q.get("load_in_4bit") or q.get("load_in_8bit")):
                 return "bnb"
+            # sparse-24-bitmask：weights 真的是 bitmask 格式，tie_weights() 會 crash，
+            # 需透過 _load_sparse_only_model (tie_word_embeddings=False) 載入
+            if (q.get("quant_method") == "compressed-tensors"
+                    and q.get("sparsity_config", {}).get("format") == "sparse-24-bitmask"):
+                return "sparse_bitmask"
         except Exception:
             pass
     # 從路徑名稱推斷

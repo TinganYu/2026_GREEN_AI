@@ -157,6 +157,8 @@ class BaseEvaluator(ABC):
             self._load_bnb_model()
         elif quantization_type == "llmcompressor":
             self._load_llmcompressor_model()
+        elif quantization_type == "sparse_bitmask":
+            self._load_sparse_only_model()
         else:
             self._load_normal_model()
 
@@ -315,7 +317,10 @@ class BaseEvaluator(ABC):
             logger.warning(f"無法修復 config.json: {e}")
 
     def _load_sparse_only_model(self):
-        """載入純稀疏模型（transformers）"""
+        """載入純稀疏模型（transformers）。
+        sparse-24-bitmask 模型須加 tie_word_embeddings=False：
+        compressed-tensors 在解壓縮時會暫時替換 embed_tokens 的 weight，
+        導致 tie_weights() 找不到 .weight 而 crash。"""
         dtype_map = {"float16": torch.float16, "float32": torch.float32, "bfloat16": torch.bfloat16}
         dtype = dtype_map.get(self.config.dtype, torch.float16)
         self._fix_llmcompressor_config()
@@ -327,6 +332,7 @@ class BaseEvaluator(ABC):
             trust_remote_code=self.config.trust_remote_code,
             low_cpu_mem_usage=True,
             token=self.config.hf_token,
+            tie_word_embeddings=False,
         )
         logger.info(f"純稀疏模型載入成功: {type(self.model).__name__}")
 

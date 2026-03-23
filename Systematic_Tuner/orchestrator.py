@@ -161,7 +161,7 @@ class SystematicOrchestrator:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.exp_dir = (
             _ROOT_DIR / "systematic_results"
-            / f"{self.search_method}_{model_name}_{task_str}_{ts}"
+            / f"{optuna_sampler}_{model_name}_{task_str}_{ts}"
         )
         self.exp_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"實驗目錄: {self.exp_dir}")
@@ -408,6 +408,7 @@ class SystematicOrchestrator:
             "model_id":       self.model_id,
             "task":           self.task,
             "search_method":  self.search_method,
+            "sampler":        self.searcher.sampler,
             "max_iterations": self.max_iterations,
             "num_samples":    self.num_samples,
             "weights":        self.weights,

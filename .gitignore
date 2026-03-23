@@ -13,6 +13,8 @@ results/*.txt
 tuning_results/
 systematic_results/baselines/
 systematic_results/optuna*
+systematic_results/tpe*
+systematic_results/random*
 test.ipynb
 test.py
 Llama*
