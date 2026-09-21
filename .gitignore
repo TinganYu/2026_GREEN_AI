@@ -15,6 +15,9 @@ systematic_results/baselines/
 systematic_results/optuna*
 systematic_results/tpe*
 systematic_results/random*
+systematic_results/nsga2*
+systematic_results/benchmark*
+final_results/*/*.json
 test.ipynb
 test.py
 Llama*

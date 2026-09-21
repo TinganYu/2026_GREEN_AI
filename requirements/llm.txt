@@ -1,0 +1,14 @@
+accelerate==1.12.0
+auto-round==0.10.2
+compressed-tensors==0.14.0
+datasets==4.6.0
+evaluate==0.4.6
+fire==0.7.1
+GPTQModel==5.7.0
+huggingface_hub==0.36.2
+kernels==0.12.1
+llmcompressor==0.10.0
+torchao==0.16.0
+transformers==4.57.6
+tokenizers==0.22.2
+safetensors==0.7.0
